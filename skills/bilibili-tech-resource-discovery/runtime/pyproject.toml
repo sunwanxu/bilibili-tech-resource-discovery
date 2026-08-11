@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bilibili-hidden-knowledge-agent"
+version = "0.3.0"
+description = "Portable runtime for the Bilibili technical-resource discovery Skill"
+requires-python = ">=3.11"
+dependencies = [
+  "openai>=2.0,<3",
+  "playwright>=1.55,<2",
+  "pydantic>=2.10,<3",
+  "python-dotenv>=1.0,<2",
+  "tenacity>=9.0,<10",
+  "yt-dlp>=2026.7.31",
+]
+
+[project.scripts]
+bhka = "bhka.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bhka"]

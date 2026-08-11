@@ -1,0 +1,4 @@
+interface:
+  display_name: "B站技术资源发现"
+  short_description: "从B站深挖技术教程、开源代码、工程资料和隐藏资源链接"
+  default_prompt: "使用 $bilibili-tech-resource-discovery，根据我的学习目标寻找有价值的技术视频、开源代码和有证据的资源链接。"

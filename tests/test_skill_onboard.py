@@ -1,0 +1,320 @@
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+from types import SimpleNamespace
+
+SCRIPT = (
+    Path(__file__).parents[1]
+    / "skills"
+    / "bilibili-tech-resource-discovery"
+    / "scripts"
+    / "onboard.py"
+)
+SPEC = importlib.util.spec_from_file_location("skill_onboard", SCRIPT)
+assert SPEC and SPEC.loader
+onboard = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(onboard)
+
+INSTALL_SCRIPT = SCRIPT.with_name("install_skill.py")
+INSTALL_SPEC = importlib.util.spec_from_file_location("skill_installer", INSTALL_SCRIPT)
+assert INSTALL_SPEC and INSTALL_SPEC.loader
+installer = importlib.util.module_from_spec(INSTALL_SPEC)
+INSTALL_SPEC.loader.exec_module(installer)
+
+PORTABLE_SCRIPT = SCRIPT.with_name("install.py")
+PORTABLE_SPEC = importlib.util.spec_from_file_location("portable_skill_installer", PORTABLE_SCRIPT)
+assert PORTABLE_SPEC and PORTABLE_SPEC.loader
+portable = importlib.util.module_from_spec(PORTABLE_SPEC)
+PORTABLE_SPEC.loader.exec_module(portable)
+
+
+def test_update_env_preserves_unrelated_secrets_without_printing(tmp_path: Path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "DEEPSEEK_API_KEY=keep-this-secret\n"
+        "BILIBILI_COOKIES_FILE=old.txt\n"
+        "BILIBILI_COOKIES_FROM_BROWSER=\n",
+        encoding="utf-8",
+    )
+
+    onboard.update_env(
+        env_path,
+        {"BILIBILI_COOKIES_FILE": "", "BILIBILI_COOKIES_FROM_BROWSER": "edge"},
+    )
+
+    values = onboard.parse_env(env_path)
+    assert values["DEEPSEEK_API_KEY"] == "keep-this-secret"
+    assert values["BILIBILI_COOKIES_FILE"] == ""
+    assert values["BILIBILI_COOKIES_FROM_BROWSER"] == "edge"
+
+
+def test_cookie_check_accepts_only_bilibili_domain_rows(tmp_path: Path) -> None:
+    cookie_path = tmp_path / "cookies.txt"
+    cookie_path.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".example.com\tTRUE\t/\tFALSE\t0\tsession\tsecret\n",
+        encoding="utf-8",
+    )
+    assert not onboard.cookie_file_has_bilibili_rows(cookie_path)
+
+    cookie_path.write_text(
+        "# Netscape HTTP Cookie File\n"
+        "#HttpOnly_.bilibili.com\tTRUE\t/\tTRUE\t0\tSESSDATA\tsecret\n",
+        encoding="utf-8",
+    )
+    assert onboard.cookie_file_has_bilibili_rows(cookie_path)
+
+
+def test_configure_public_clears_both_auth_modes(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text(
+        "BILIBILI_COOKIES_FILE=cookies.txt\n"
+        "BILIBILI_COOKIES_FROM_BROWSER=edge\n",
+        encoding="utf-8",
+    )
+
+    assert onboard.configure(tmp_path, None, None, True) == 0
+
+    values = onboard.parse_env(tmp_path / ".env")
+    assert values["BILIBILI_COOKIES_FILE"] == ""
+    assert values["BILIBILI_COOKIES_FROM_BROWSER"] == ""
+
+
+def test_status_does_not_claim_login_before_verification(tmp_path: Path, monkeypatch, capsys) -> None:
+    cookie_path = tmp_path / "cookies.txt"
+    cookie_path.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".bilibili.com\tTRUE\t/\tTRUE\t0\tSESSDATA\tsecret\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text(
+        f"BILIBILI_COOKIES_FILE={cookie_path}\n",
+        encoding="utf-8",
+    )
+    python = tmp_path / "python"
+    bhka = tmp_path / "bhka"
+    python.touch()
+    bhka.touch()
+    monkeypatch.setattr(onboard, "venv_paths", lambda root: (python, bhka))
+
+    assert onboard.status(tmp_path) == 0
+
+    output = capsys.readouterr().out
+    assert "[VERIFY-NEEDED]" in output
+    assert "[READY]" not in output
+    assert "secret" not in output
+
+
+def test_status_identifies_project_managed_login(tmp_path: Path, monkeypatch, capsys) -> None:
+    cookie_path = tmp_path / ".auth" / "bilibili.cookies.txt"
+    cookie_path.parent.mkdir()
+    cookie_path.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".bilibili.com\tTRUE\t/\tTRUE\t0\tSESSDATA\tsecret\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text(
+        f"BILIBILI_COOKIES_FILE={cookie_path}\n",
+        encoding="utf-8",
+    )
+    python = tmp_path / "python"
+    bhka = tmp_path / "bhka"
+    python.touch()
+    bhka.touch()
+    monkeypatch.setattr(onboard, "venv_paths", lambda root: (python, bhka))
+
+    assert onboard.status(tmp_path) == 0
+
+    output = capsys.readouterr().out
+    assert "Managed login configuration exists" in output
+    assert "Project-managed .auth session" in output
+    assert "secret" not in output
+
+
+def test_installer_excludes_python_cache_and_writes_project_pointer(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    skill = project / "skills" / installer.SKILL_NAME
+    (project / "pyproject.toml").parent.mkdir(parents=True)
+    (project / "pyproject.toml").write_text(
+        '[project]\nname = "bilibili-hidden-knowledge-agent"\n',
+        encoding="utf-8",
+    )
+    for relative in installer.REQUIRED_FILES:
+        path = skill / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("placeholder", encoding="utf-8")
+    cache = skill / "scripts" / "__pycache__" / "cached.pyc"
+    cache.parent.mkdir(parents=True)
+    cache.write_bytes(b"cache")
+
+    target, backup = installer.install_skill(project, tmp_path / "installed", force=False)
+
+    assert backup is None
+    assert (target / ".project-root").read_text(encoding="utf-8") == str(project.resolve())
+    assert not (target / "scripts" / "__pycache__").exists()
+
+
+def test_portable_installer_places_complete_skill_in_opencode_global_directory(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(portable, "install_runtime", lambda target, login: None)
+
+    installed = portable.install(
+        "opencode",
+        force=False,
+        login=False,
+        home=tmp_path,
+    )
+
+    target = tmp_path / ".config" / "opencode" / "skills" / portable.SKILL_NAME
+    assert installed == [target]
+    assert (target / "SKILL.md").is_file()
+    assert (target / "runtime" / "pyproject.toml").is_file()
+    assert (target / "runtime" / "src" / "bhka" / "cli.py").is_file()
+
+
+def test_portable_update_preserves_managed_login_state(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(portable, "install_runtime", lambda target, login: None)
+    target = portable.install("opencode", False, False, home=tmp_path)[0]
+    cookie = target / "runtime" / ".auth" / "bilibili.cookies.txt"
+    cookie.parent.mkdir()
+    cookie.write_text("local credential placeholder", encoding="utf-8")
+    venv_marker = target / "runtime" / ".venv" / "installed.txt"
+    venv_marker.parent.mkdir()
+    venv_marker.write_text("preserve runtime", encoding="utf-8")
+    (target / "runtime" / ".env").write_text(
+        (
+            f"BILIBILI_COOKIES_FILE={cookie}\n"
+            "BILIBILI_RETRIES=2\n"
+            "BILIBILI_RATE_LIMIT_SECONDS=1.0\n"
+        ),
+        encoding="utf-8",
+    )
+
+    portable.install("opencode", True, False, home=tmp_path)
+
+    assert cookie.read_text(encoding="utf-8") == "local credential placeholder"
+    env = (target / "runtime" / ".env").read_text(encoding="utf-8")
+    assert str(cookie.resolve()) in env
+    assert "BILIBILI_RETRIES=1" in env
+    assert "BILIBILI_RATE_LIMIT_SECONDS=2.5" in env
+    assert venv_marker.read_text(encoding="utf-8") == "preserve runtime"
+
+
+def test_portable_update_falls_back_when_active_skill_directory_is_locked(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(portable, "install_runtime", lambda target, login: None)
+    target = portable.install("opencode", False, False, home=tmp_path)[0]
+    marker = target / "local-marker.txt"
+    marker.write_text("old installation", encoding="utf-8")
+    real_replace = portable.os.replace
+
+    def replace_with_active_directory_lock(source, destination):
+        if Path(source) == target:
+            raise PermissionError("active Skill is in use")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(portable.os, "replace", replace_with_active_directory_lock)
+
+    portable.install("opencode", True, False, home=tmp_path)
+
+    assert (target / "SKILL.md").is_file()
+    backups = list((tmp_path / ".config" / "opencode" / "skill-backups").glob("*.backup-*"))
+    assert len(backups) == 1
+    assert (backups[0] / marker.name).read_text(encoding="utf-8") == "old installation"
+
+
+def test_portable_install_can_migrate_state_from_legacy_project(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(portable, "install_runtime", lambda target, login: None)
+    legacy = tmp_path / "legacy"
+    legacy_cookie = legacy / ".auth" / "bilibili.cookies.txt"
+    legacy_cookie.parent.mkdir(parents=True)
+    legacy_cookie.write_text("local credential placeholder", encoding="utf-8")
+    (legacy / ".env").write_text(
+        f"BILIBILI_COOKIES_FILE={legacy_cookie}\n",
+        encoding="utf-8",
+    )
+
+    target = portable.install(
+        "opencode",
+        force=False,
+        login=False,
+        home=tmp_path,
+        state_from=legacy,
+    )[0]
+
+    migrated = target / "runtime" / ".auth" / "bilibili.cookies.txt"
+    assert migrated.read_text(encoding="utf-8") == "local credential placeholder"
+    assert str(migrated.resolve()) in (target / "runtime" / ".env").read_text(encoding="utf-8")
+
+
+def test_empty_installed_runtime_does_not_hide_legacy_login(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(portable, "install_runtime", lambda target, login: None)
+    target = portable.install("opencode", False, False, home=tmp_path)[0]
+    legacy = tmp_path / "legacy"
+    legacy_cookie = legacy / ".auth" / "bilibili.cookies.txt"
+    legacy_cookie.parent.mkdir(parents=True)
+    legacy_cookie.write_text("local credential placeholder", encoding="utf-8")
+    (legacy / ".env").write_text(
+        f"BILIBILI_COOKIES_FILE={legacy_cookie}\n",
+        encoding="utf-8",
+    )
+
+    portable.install(
+        "opencode",
+        force=True,
+        login=False,
+        home=tmp_path,
+        state_from=legacy,
+    )
+
+    migrated = target / "runtime" / ".auth" / "bilibili.cookies.txt"
+    assert migrated.read_text(encoding="utf-8") == "local credential placeholder"
+
+
+def test_bundled_runtime_matches_primary_source_tree() -> None:
+    project = Path(__file__).parents[1]
+    bundled = project / "skills" / portable.SKILL_NAME / "runtime" / "src" / "bhka"
+    source = project / "src" / "bhka"
+
+    assert {
+        path.name: path.read_bytes() for path in bundled.glob("*.py")
+    } == {
+        path.name: path.read_bytes() for path in source.glob("*.py")
+    }
+
+
+def test_portable_installer_verifies_the_exact_bundled_runtime_version(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    target = tmp_path / "installed-skill"
+    runtime = target / "runtime"
+    runtime.mkdir(parents=True)
+    (runtime / "pyproject.toml").write_text(
+        '[project]\nname = "bilibili-hidden-knowledge-agent"\nversion = "0.3.0"\n',
+        encoding="utf-8",
+    )
+    python = runtime / "python"
+    bhka = runtime / "bhka"
+    python.touch()
+    bhka.touch()
+    monkeypatch.setattr(portable, "runtime_paths", lambda value: (python, bhka))
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command == [str(bhka), "--version"]:
+            return SimpleNamespace(returncode=0, stdout="bhka 0.3.0\n")
+        return SimpleNamespace(returncode=0, stdout="")
+
+    monkeypatch.setattr(portable.subprocess, "run", fake_run)
+
+    portable.install_runtime(target, login=False)
+
+    assert [str(bhka), "--version"] in calls
+    assert "Runtime verified: bhka 0.3.0" in capsys.readouterr().out
