@@ -10,8 +10,9 @@ from uuid import uuid4
 
 from .models import DiscoveryReport, PartSelection, RawVideoData, VideoAnalysisSchema
 
-COOLDOWN_MINUTES = (5, 15, 30)
-COOLDOWN_ESCALATION_WINDOW = timedelta(hours=6)
+COOLDOWN_MINUTES = (2, 5, 10)
+COOLDOWN_ESCALATION_WINDOW = timedelta(hours=2)
+COOLDOWN_POLICY = "adaptive_2_5_10"
 
 
 class FileStorage:
@@ -112,13 +113,43 @@ class FileStorage:
                     ).isoformat(),
                     "cooldown_reason": "risk_control",
                     "official_duration_known": False,
-                    "cooldown_policy": "adaptive_5_15_30",
+                    "cooldown_policy": COOLDOWN_POLICY,
                     "cooldown_minutes": cooldown_minutes,
                     "consecutive_412_count": count,
-                    "escalation_window_hours": 6,
+                    "escalation_window_hours": 2,
                 },
             )
         return json_path, report_path
+
+    def load_discovery_seeds(
+        self,
+        requirement: str,
+        *,
+        max_age_hours: int = 168,
+    ) -> tuple[list[str], list[str]]:
+        """Reuse prior candidate/resource links without repeating discovery requests."""
+        readable = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "-", requirement).strip("-")
+        digest = hashlib.sha256(requirement.encode("utf-8")).hexdigest()[:8]
+        stem = f"{readable[:48] or 'search'}-{digest}"
+        path = self.root / "data" / "discovery" / stem / "latest.json"
+        try:
+            modified = datetime.fromtimestamp(path.stat().st_mtime, UTC)
+            if datetime.now(UTC) - modified > timedelta(hours=max(1, max_age_hours)):
+                return [], []
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return [], []
+        videos: list[str] = []
+        resources: list[str] = []
+        for item in [*(payload.get("candidates") or []), *(payload.get("videos") or [])]:
+            url = str(item.get("webpage_url") or "").strip() if isinstance(item, dict) else ""
+            if url and url not in videos:
+                videos.append(url)
+        for item in payload.get("resources") or []:
+            url = str(item.get("locator") or "").strip() if isinstance(item, dict) else ""
+            if url and url not in resources:
+                resources.append(url)
+        return videos, resources
 
     def active_cooldown(self, now: datetime | None = None) -> dict | None:
         path = self.root / "data" / "state" / "bilibili_cooldown.json"
@@ -151,10 +182,10 @@ class FileStorage:
             path.unlink(missing_ok=True)
             return None
         value.update({
-            "cooldown_policy": "adaptive_5_15_30",
+            "cooldown_policy": COOLDOWN_POLICY,
             "cooldown_minutes": cooldown_minutes,
             "consecutive_412_count": count,
-            "escalation_window_hours": 6,
+            "escalation_window_hours": 2,
             "recommended_not_before": not_before.isoformat(),
         })
         return value

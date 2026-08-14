@@ -17,13 +17,15 @@ video count when the user's real goal is a reusable project.
 Treat the directory containing this `SKILL.md` as `<skill>`. The portable runtime and its private
 state live under `<skill>/runtime`; no external companion repository is required.
 
-Use the bundled executable:
+Use the bundled executable. The default private environment is `.venv`. If
+`<skill>/runtime/.venv-path` exists, read its single directory name and use that environment instead;
+the installer writes this pointer only when a running Windows agent has locked an older launcher.
 
-- Windows: `<skill>\runtime\.venv\Scripts\bhka.exe`
-- macOS/Linux: `<skill>/runtime/.venv/bin/bhka`
+- Windows: `<skill>\runtime\<environment>\Scripts\bhka.exe`
+- macOS/Linux: `<skill>/runtime/<environment>/bin/bhka`
 
 Treat that exact absolute executable path as `<bhka>`. Never invoke a bare `bhka` from `PATH`; it may
-resolve to an older installation. Confirm `<bhka> --version` reports `bhka 0.3.0` before a smoke test.
+resolve to an older installation. Confirm `<bhka> --version` reports `bhka 0.6.0` before a smoke test.
 Use `<skill>/runtime` whenever a command requests `--project-root`. During source development only,
 an explicitly supplied external `bilibili-hidden-knowledge-agent` repository may replace the bundled
 runtime.
@@ -82,20 +84,32 @@ do not expose query counts, CLI flags, or candidate limits unless they ask for d
 Use multi-source discovery for a normal run:
 
 1. Search GitHub, Gitee, OSHWHub/JLC Open Source, and relevant official project sites directly with
-   two to four resource-oriented queries. Do not require a project to originate from a video.
-2. Use ordinary web search to find 10-30 public Bilibili video URLs with two to four precise
+   four to six resource-oriented queries. Do not require a project to originate from a video.
+2. Use ordinary web search to find 15-40 public Bilibili video URLs with four to six precise
    `site:bilibili.com/video` queries. Prefer candidates whose snippets or descriptions expose
    repositories, hardware projects, project names, or downloadable engineering artifacts.
-3. Build one to three precise Bilibili internal queries only when public-web candidates are
-   insufficient. Preserve explicit entities and cover synonyms, artifacts, and distinct routes.
+3. Keep Bilibili internal search disabled during normal discovery. Use one precise internal query
+   only for an explicit, bounded diagnostic when public indexes are unavailable or demonstrably
+   insufficient. Never use repeated internal queries as the primary discovery path.
 4. Pass public Bilibili URLs with repeated `--candidate-url` and direct project links with repeated
    `--resource-url`. These are internal host-AI details, not user inputs.
+
+When `FIRECRAWL_API_KEY` is already configured in the bundled runtime, leave `--web-search auto` in
+place. The runtime then performs five shallow, bounded public-web queries before direct Bilibili
+discovery and contributes public Bilibili URLs plus direct project links to the same evidence pool. Treat this
+as an optional coverage enhancement: never require a Firecrawl key for normal use, never put the key
+in a command line or report, and continue with existing sources when the provider is unavailable.
+Use `--web-search off` for offline tests or when the user explicitly disables the provider.
 
 Example internal invocation:
 
 ```text
-<bhka> discover "<natural-language requirement>" --query "<precise topic>" --candidate-url "<Bilibili URL>" --resource-url "<repository URL>" --max-candidates 50 --deep 8 --comments --project-root <skill>/runtime
+<bhka> discover "<natural-language requirement>" --query "<precise topic>" --candidate-url "<Bilibili URL>" --resource-url "<repository URL>" --max-candidates 80 --deep 8 --comments --bilibili-search off --project-root <skill>/runtime
 ```
+
+Keep `--bilibili-search off` for normal runs; this is the runtime default. Use `on` only for a
+deliberate, bounded internal-search diagnostic. Candidate breadth and deep inspection are separate:
+return many relevant candidate links, but fetch subtitles and comments only for the best bounded set.
 
 Do not ask the user to invent keywords or identify the official problem title. Use the host AI's
 research and reasoning to derive them. If no explicit query plan is supplied, the runtime uses a
@@ -111,6 +125,11 @@ When evidence mentions a distinctive project name without a URL, perform a preci
 for that name. Merge the same resource across channels and retain every evidence origin and
 supporting video.
 
+For a normal broad request, aim to present 10-20 useful resource links and 15-30 supporting or
+alternative video links when the evidence actually supports that many. Do not pad the answer with
+weakly related results to reach a quota. If fewer survive verification, return the smaller honest set
+and say which discovery channel was thin.
+
 Rank resources before videos. Prefer, in order: accessible projects with verified licenses and
 matching artifacts; accessible public source without verified licenses; platform projects whose
 license terms need review; restricted shared files; and unverified leads. Evaluate schematic, PCB,
@@ -125,14 +144,21 @@ comparisons instead of replacing the topic with a fixed domain vocabulary. Avoid
 queries that succeeded, actually failed, and were skipped by a circuit breaker; include the stopped
 query and stop reason.
 
-Run queries adaptively. Start with the most precise query and stop expanding once there are enough
+Run any explicitly enabled internal queries adaptively. Start with the most precise query and stop expanding once there are enough
 unique candidates for the requested deep-inspection limit. Before deep inspection, require year,
 problem-letter, and quoted-phrase anchors when the request contains them. Apply a generic
 topic-overlap threshold to reject cross-domain results; do not encode one task's positive or
 negative vocabulary into the core filter. Treat models and acronyms as alternative relevance signals,
-not a requirement that every term appear in the title or description. Keep explicit `--candidate-url`
-items eligible for bounded deep inspection even when preview metadata is sparse. If the strict filter
-would reject every candidate, deep-inspect only the highest-ranked bounded fallback and label it.
+not a requirement that every term appear in the title or description. Send explicit
+`--candidate-url` items directly to bounded deep inspection without a separate Bilibili preview
+request. Enable the strict rejection gate only when more than 30 candidates compete for the
+shortlist. Never reject every candidate and then restore the same set as a fallback.
+
+Reuse the local seven-day cache for identical natural-language requirements, BVIDs, previews, and
+explicitly enabled internal queries. Cached subtitles and comments are stored locally without author
+identifiers. A repeated run should reuse completed evidence rather than request it from Bilibili
+again. Prefer `discover --summary-json` for agent-to-agent transport; it emits UTF-8 JSON containing
+counts and result URLs without requiring the agent to parse Markdown or guess a report directory.
 
 Space direct Bilibili requests across authentication, search, preview, and deep-inspection phases;
 do not rely only on an extractor's per-command delay. Increase spacing gradually within a run and
@@ -149,9 +175,11 @@ The HTTP 412 circuit breaker is run-wide, not search-only. Skip candidate previe
 description, subtitles, comments, multipart listing, and deep inspection after it opens. Preserve
 only candidates and evidence completed beforehand. Honor the persisted local safety cooldown; it is
 a client recommendation, not an official Bilibili countdown and not evidence that login failed.
-Use the adaptive schedule: 5 minutes after the first 412, 15 minutes after a second 412 within six
-hours, and 30 minutes after further consecutive 412 responses. Reset to five minutes after six hours
-without another 412. Continue public-web and open-project discovery throughout the cooldown.
+Use the lightweight adaptive schedule: 2 minutes after the first 412, 5 minutes after a second 412
+within two hours, and at most 10 minutes after further consecutive 412 responses. Reset to two
+minutes after two hours without another 412. Never activate cooldown from ordinary successful,
+empty, or repeated searches; only a confirmed HTTP 412 can create it. Continue public-web and
+open-project discovery throughout the cooldown.
 
 Tell the user which phase is running: preflight, keyword expansion, candidate search, ranking, deep
 inspection, external-link verification, or report writing. If a command is still running, provide a

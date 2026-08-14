@@ -21,6 +21,11 @@ class Settings:
     timeout_seconds: int
     retries: int
     rate_limit_seconds: float
+    firecrawl_api_key: str | None = None
+    firecrawl_base_url: str = "https://api.firecrawl.dev"
+    firecrawl_search_limit: int = 8
+    firecrawl_timeout_seconds: int = 60
+    cache_ttl_hours: int = 168
 
     @classmethod
     def load(cls, project_root: Path | None = None) -> Settings:
@@ -40,4 +45,17 @@ class Settings:
             timeout_seconds=int(os.getenv("BILIBILI_TIMEOUT_SECONDS", "20")),
             retries=int(os.getenv("BILIBILI_RETRIES", "1")),
             rate_limit_seconds=float(os.getenv("BILIBILI_RATE_LIMIT_SECONDS", "2.5")),
+            firecrawl_api_key=os.getenv("FIRECRAWL_API_KEY") or None,
+            firecrawl_base_url=os.getenv(
+                "FIRECRAWL_BASE_URL", "https://api.firecrawl.dev"
+            ).rstrip("/"),
+            firecrawl_search_limit=max(
+                1, min(10, int(os.getenv("FIRECRAWL_SEARCH_LIMIT", "8")))
+            ),
+            firecrawl_timeout_seconds=max(
+                10, min(120, int(os.getenv("FIRECRAWL_TIMEOUT_SECONDS", "60")))
+            ),
+            cache_ttl_hours=max(
+                1, min(720, int(os.getenv("BHKA_CACHE_TTL_HOURS", "168")))
+            ),
         )

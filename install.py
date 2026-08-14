@@ -4,7 +4,6 @@ import argparse
 import os
 import subprocess
 import sys
-import venv
 from pathlib import Path
 
 PROJECT_NAME = "bilibili-hidden-knowledge-agent"
@@ -50,7 +49,13 @@ def run(command: list[str]) -> int:
     return subprocess.run(command, check=False).returncode
 
 
-def install(root: Path, *, login: bool = True) -> int:
+def install(
+    root: Path,
+    *,
+    login: bool = True,
+    agent: str = "auto",
+    home: Path | None = None,
+) -> int:
     if sys.version_info < (3, 11):  # noqa: UP036 - bootstrap diagnoses older host Pythons
         print("Python 3.11 or newer is required.")
         return 2
@@ -58,26 +63,20 @@ def install(root: Path, *, login: bool = True) -> int:
         print(f"Run this installer from the {PROJECT_NAME} project directory.")
         return 2
 
-    venv_python, _ = venv_paths(root)
-    if not venv_python.is_file():
-        print("[1/4] Creating the local Python environment...")
-        venv.EnvBuilder(with_pip=True).create(root / ".venv")
-    else:
-        print("[1/4] Local Python environment already exists.")
-
-    print("[2/4] Portable runtime bundle found.")
-
-    print("[3/4] Installing or updating the portable Skill...")
+    print("[1/3] Self-contained Skill package found.", flush=True)
+    print("[2/3] Installing or updating the Skill...", flush=True)
     skill_installer = root / "skills" / SKILL_NAME / "scripts" / "install.py"
     install_command = [
-        str(venv_python),
+        sys.executable,
         str(skill_installer),
         "--agent",
-        "codex",
+        agent,
         "--force",
-        "--state-from",
-        str(root),
     ]
+    if home is not None:
+        install_command.extend(["--home", str(home)])
+    else:
+        install_command.extend(["--state-from", str(root)])
     if not login:
         install_command.append("--no-login")
     if run(install_command):
@@ -85,12 +84,14 @@ def install(root: Path, *, login: bool = True) -> int:
         return 1
 
     if not login:
-        print("[4/4] Login skipped for an offline or automated installation check.")
+        print("[3/3] Login skipped for an offline or automated installation check.")
     else:
-        print("[4/4] Existing managed login was preserved, or first login was completed.")
+        print("[3/3] Existing managed login was preserved, or first login was completed.")
 
     print("Installation is complete.")
-    print("Open a new agent session and describe the technical resource you want naturally.")
+    print(
+        "Continue the original request now; restart the agent only if it does not detect the Skill."
+    )
     return 0
 
 
@@ -103,12 +104,24 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="install locally without opening Edge; intended for CI or offline checks",
     )
+    parser.add_argument(
+        "--agent",
+        choices=("auto", "codex", "opencode", "all"),
+        default="auto",
+        help="target agent; auto detects installed clients",
+    )
+    parser.add_argument("--home", type=Path, help=argparse.SUPPRESS)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return install(Path(__file__).resolve().parent, login=not args.no_login)
+    return install(
+        Path(__file__).resolve().parent,
+        login=not args.no_login,
+        agent=args.agent,
+        home=args.home,
+    )
 
 
 if __name__ == "__main__":

@@ -33,7 +33,7 @@ def prepare_project(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
 
 
 def test_one_command_install_keeps_existing_managed_login(tmp_path: Path, monkeypatch) -> None:
-    python, bhka = prepare_project(tmp_path, monkeypatch)
+    _, bhka = prepare_project(tmp_path, monkeypatch)
     managed = tmp_path / ".auth" / "bilibili.cookies.txt"
     managed.parent.mkdir()
     managed.write_text("local credential placeholder", encoding="utf-8")
@@ -47,7 +47,7 @@ def test_one_command_install_keeps_existing_managed_login(tmp_path: Path, monkey
     assert installer.install(tmp_path) == 0
 
     assert len(commands) == 1
-    assert commands[0][0] == str(python)
+    assert commands[0][0] == installer.sys.executable
     assert all(str(bhka) not in command for command in commands)
 
 
@@ -62,7 +62,7 @@ def test_one_command_install_delegates_first_login_to_portable_installer(
     assert installer.install(tmp_path) == 0
 
     assert commands[0][1].endswith("install.py")
-    assert commands[0][2:5] == ["--agent", "codex", "--force"]
+    assert commands[0][2:5] == ["--agent", "auto", "--force"]
     assert "--no-login" not in commands[0]
 
 
@@ -74,3 +74,24 @@ def test_one_command_install_can_skip_login_for_ci(tmp_path: Path, monkeypatch) 
     assert installer.install(tmp_path, login=False) == 0
 
     assert commands[0][-1] == "--no-login"
+
+
+def test_one_command_install_accepts_known_host_and_isolated_home(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    prepare_project(tmp_path, monkeypatch)
+    commands: list[list[str]] = []
+    monkeypatch.setattr(installer, "run", lambda command: commands.append(command) or 0)
+    isolated_home = tmp_path / "new-user"
+
+    assert installer.install(
+        tmp_path,
+        login=False,
+        agent="opencode",
+        home=isolated_home,
+    ) == 0
+
+    assert commands[0][2:5] == ["--agent", "opencode", "--force"]
+    assert commands[0][-3:] == ["--home", str(isolated_home), "--no-login"]
+    assert "--state-from" not in commands[0]

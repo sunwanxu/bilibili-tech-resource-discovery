@@ -28,6 +28,7 @@ from bhka.models import (
     DiscoveryReport,
     ExternalResource,
     RawVideoData,
+    SearchCandidate,
     SearchResult,
     SubtitleTrack,
     VideoMetadata,
@@ -115,6 +116,128 @@ def test_search_results_expose_analyze_compatible_canonical_ids(monkeypatch, tmp
     assert result.webpage_url.endswith("/av116136268144356")
 
 
+def test_repeated_internal_search_uses_local_cache(monkeypatch, tmp_path: Path):
+    calls = 0
+
+    class FakeYoutubeDL:
+        def __init__(self, options):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def extract_info(self, url, download=False):
+            nonlocal calls
+            calls += 1
+            return {"entries": [{"id": "116136268144356"}]}
+
+    monkeypatch.setattr("bhka.source.YoutubeDL", FakeYoutubeDL)
+    settings = SimpleNamespace(
+        project_root=tmp_path,
+        cookies_file=None,
+        cookies_from_browser=None,
+        bilibili_user_agent=None,
+        timeout_seconds=20,
+        retries=1,
+        rate_limit_seconds=0,
+        cache_ttl_hours=168,
+    )
+
+    first = YtDlpDataSource(settings).search("motor", 5)
+    second = YtDlpDataSource(settings).search("motor", 5)
+
+    assert calls == 1
+    assert second == first
+
+
+def test_invalid_ipv6_url_from_extractor_becomes_a_bounded_source_error(
+    monkeypatch,
+    tmp_path: Path,
+):
+    class FakeYoutubeDL:
+        def __init__(self, options):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def extract_info(self, url, download=False):
+            raise ValueError("Invalid IPv6 URL")
+
+    monkeypatch.setattr("bhka.source.YoutubeDL", FakeYoutubeDL)
+    settings = SimpleNamespace(
+        project_root=tmp_path,
+        cookies_file=None,
+        cookies_from_browser=None,
+        bilibili_user_agent=None,
+        timeout_seconds=20,
+        retries=1,
+        rate_limit_seconds=0,
+        cache_ttl_hours=168,
+    )
+
+    with pytest.raises(DataSourceError) as captured:
+        YtDlpDataSource(settings).search("motor", 5)
+
+    assert captured.value.category == "upstream"
+    assert "Invalid IPv6 URL" in str(captured.value)
+
+
+def test_repeated_video_fetch_reuses_cached_metadata_and_subtitles(
+    monkeypatch,
+    tmp_path: Path,
+):
+    calls = 0
+
+    class FakeYoutubeDL:
+        def __init__(self, options):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def extract_info(self, url, download=False):
+            nonlocal calls
+            calls += 1
+            return {
+                "id": "BV1234567890",
+                "display_id": "BV1234567890",
+                "webpage_url": "https://www.bilibili.com/video/BV1234567890",
+                "title": "cached motor tutorial",
+                "description": "github.com/example/project",
+                "subtitles": {},
+                "automatic_captions": {},
+            }
+
+    monkeypatch.setattr("bhka.source.YoutubeDL", FakeYoutubeDL)
+    settings = SimpleNamespace(
+        project_root=tmp_path,
+        cookies_file=None,
+        cookies_from_browser=None,
+        bilibili_user_agent=None,
+        timeout_seconds=20,
+        retries=1,
+        rate_limit_seconds=0,
+        cache_ttl_hours=168,
+    )
+
+    first = YtDlpDataSource(settings).fetch("BV1234567890")
+    second = YtDlpDataSource(settings).fetch("BV1234567890")
+
+    assert calls == 1
+    assert second.metadata.title == first.metadata.title
+    assert second.metadata.author is None
+
+
 def test_browser_cookie_spec_is_explicit_and_validated():
     assert browser_cookie_spec("chrome") == ("chrome",)
     assert browser_cookie_spec("chrome:Profile 1") == ("chrome", "Profile 1", None, None)
@@ -197,7 +320,46 @@ def test_cli_exposes_runtime_version(capsys):
         cli_module.main(["--version"])
 
     assert exit_info.value.code == 0
-    assert capsys.readouterr().out.strip() == "bhka 0.3.0"
+    assert capsys.readouterr().out.strip() == "bhka 0.6.0"
+
+
+def test_discover_defaults_favor_broad_web_candidates_without_forcing_internal_search():
+    args = cli_module.build_parser().parse_args(["discover", "ESP32 project"])
+
+    assert args.max_candidates == 80
+    assert args.deep == 8
+    assert args.bilibili_search == "off"
+
+
+def test_discover_accepts_explicit_internal_search_disable():
+    args = cli_module.build_parser().parse_args([
+        "discover",
+        "ESP32 project",
+        "--bilibili-search",
+        "off",
+    ])
+
+    assert args.bilibili_search == "off"
+
+
+def test_discover_summary_json_is_clean_utf8_machine_output(tmp_path: Path, capsys):
+    exit_code = cli_module.main([
+        "discover",
+        "中文缓存测试",
+        "--web-search",
+        "off",
+        "--bilibili-search",
+        "off",
+        "--summary-json",
+        "--project-root",
+        str(tmp_path),
+    ])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 1
+    assert payload["run_status"] == "failed"
+    assert payload["candidate_urls"] == []
+    assert "中文缓存测试" in payload["json_path"]
 
 
 def test_summary_json_never_instantiates_optional_ai_analyzer(
@@ -799,11 +961,13 @@ class ExplicitCandidateSource:
             rate_limit_seconds=0,
         )
         self.fetch_calls = 0
+        self.preview_calls = 0
 
     def search(self, query: str, limit: int):
         raise AssertionError("enough explicit candidates should skip internal search")
 
     def preview(self, video: str):
+        self.preview_calls += 1
         return VideoMetadata(
             bvid=video.rsplit("/", 1)[-1],
             title="alternative implementation",
@@ -832,6 +996,28 @@ class FilterFallbackSource(ExplicitCandidateSource):
         ]
 
 
+class LargeMismatchSource(FilterFallbackSource):
+    def search(self, query: str, limit: int):
+        return [
+            SearchResult(
+                source_id=f"av{100000 + index}",
+                webpage_url=f"https://www.bilibili.com/video/av{100000 + index}",
+                query=query,
+                rank=index + 1,
+            )
+            for index in range(35)
+        ]
+
+    def preview(self, video: str):
+        self.preview_calls += 1
+        return VideoMetadata(
+            bvid="BV1234567890",
+            title="unrelated cooking vlog",
+            description="daily life and food",
+            webpage_url=video,
+        )
+
+
 def test_discovery_fails_fast_for_deterministic_authentication_error():
     source = FailingSearchSource([
         DataSourceError(
@@ -841,7 +1027,9 @@ def test_discovery_fails_fast_for_deterministic_authentication_error():
         )
     ])
 
-    report = DiscoveryPipeline(source).run("find STM32 code", include_comments=False)
+    report = DiscoveryPipeline(source).run(
+        "find STM32 code", include_comments=False, bilibili_search="on"
+    )
 
     assert source.calls == 1
     assert report.run_status == "failed"
@@ -855,7 +1043,9 @@ def test_discovery_fails_fast_for_deterministic_authentication_error():
 def test_discovery_auth_preflight_stops_before_keyword_requests():
     source = FailingAuthPreflightSource()
 
-    report = DiscoveryPipeline(source).run("find STM32 code", include_comments=False)
+    report = DiscoveryPipeline(source).run(
+        "find STM32 code", include_comments=False, bilibili_search="on"
+    )
 
     assert source.search_calls == 0
     assert report.run_status == "failed"
@@ -875,7 +1065,9 @@ def test_discovery_circuit_breaks_on_412_after_partial_success():
         ),
     ])
 
-    report = DiscoveryPipeline(source).run("find STM32 code", include_comments=False)
+    report = DiscoveryPipeline(source).run(
+        "find STM32 code", include_comments=False, bilibili_search="on"
+    )
 
     assert source.calls == 2
     assert report.run_status == "partial_success"
@@ -896,6 +1088,7 @@ def test_412_global_circuit_preserves_candidates_without_preview_or_deep_request
         max_candidates=10,
         deep_limit=5,
         include_comments=True,
+        bilibili_search="on",
     )
 
     assert source.search_calls == 2
@@ -919,6 +1112,7 @@ def test_search_stops_when_first_precise_query_reaches_candidate_target():
         max_candidates=20,
         deep_limit=5,
         include_comments=False,
+        bilibili_search="on",
     )
 
     assert source.search_calls == 1
@@ -938,6 +1132,7 @@ def test_public_web_candidates_can_replace_internal_search_for_breadth():
         deep_limit=2,
         include_comments=False,
         seed_video_urls=urls,
+        bilibili_search="auto",
     )
 
     assert source.search_calls == 0
@@ -945,6 +1140,40 @@ def test_public_web_candidates_can_replace_internal_search_for_breadth():
     assert report.candidates_found == 5
     assert all(item.provenance == ["web_index"] for item in report.candidates)
     assert len(report.videos) == 2
+
+
+def test_one_public_web_candidate_is_enough_when_only_one_video_will_be_inspected():
+    source = ExplicitCandidateSource()
+
+    report = DiscoveryPipeline(source).run(
+        "FOC motor controller",
+        max_candidates=80,
+        deep_limit=1,
+        include_comments=False,
+        seed_video_urls=["https://www.bilibili.com/video/BV1234567890"],
+        bilibili_search="auto",
+    )
+
+    assert report.stop_reason == "web_candidate_target_reached"
+    assert source.fetch_calls == 1
+    assert len(report.videos) == 1
+
+
+def test_internal_search_can_be_disabled_even_when_web_candidates_are_sparse():
+    source = ExplicitCandidateSource()
+
+    report = DiscoveryPipeline(source).run(
+        "FOC motor controller",
+        max_candidates=80,
+        deep_limit=5,
+        include_comments=False,
+        seed_video_urls=["https://www.bilibili.com/video/BV1234567890"],
+        bilibili_search="off",
+    )
+
+    assert report.stop_reason == "bilibili_search_disabled"
+    assert source.fetch_calls == 1
+    assert len(report.videos) == 1
 
 
 def test_explicit_candidate_urls_are_deep_inspected_even_with_sparse_preview_metadata():
@@ -960,6 +1189,7 @@ def test_explicit_candidate_urls_are_deep_inspected_even_with_sparse_preview_met
     )
 
     assert source.fetch_calls == 2
+    assert source.preview_calls == 0
     assert len(report.videos) == 2
     assert sum(
         event.status == "retained_explicit_candidate"
@@ -967,7 +1197,7 @@ def test_explicit_candidate_urls_are_deep_inspected_even_with_sparse_preview_met
     ) >= 2
 
 
-def test_all_rejected_internal_candidates_use_a_bounded_deep_inspection_fallback():
+def test_small_internal_candidate_pool_is_ranked_without_strict_filter_fallback():
     source = FilterFallbackSource()
 
     report = DiscoveryPipeline(source).run(
@@ -976,14 +1206,34 @@ def test_all_rejected_internal_candidates_use_a_bounded_deep_inspection_fallback
         deep_limit=2,
         include_comments=False,
         planned_queries=["FOC STM32 AS5600 无刷电机"],
+        bilibili_search="on",
     )
 
     assert source.fetch_calls == 2
     assert len(report.videos) == 2
-    assert sum(
-        event.status == "retained_filter_fallback"
-        for event in report.events
-    ) == 2
+    assert not any(
+        event.status == "retained_filter_fallback" for event in report.events
+    )
+
+
+def test_large_mismatched_internal_pool_is_not_restored_after_strict_filtering():
+    source = LargeMismatchSource()
+
+    report = DiscoveryPipeline(source).run(
+        "FOC STM32 AS5600 motor controller",
+        max_candidates=80,
+        deep_limit=2,
+        include_comments=False,
+        planned_queries=["FOC STM32 AS5600 motor controller"],
+        bilibili_search="on",
+    )
+
+    assert source.fetch_calls == 0
+    assert report.videos == []
+    assert sum(event.status == "rejected" for event in report.events) == 8
+    assert not any(
+        event.status == "retained_filter_fallback" for event in report.events
+    )
 
 
 def test_pipeline_spaces_requests_across_phases(monkeypatch):
@@ -1011,6 +1261,7 @@ def test_resource_bearing_video_is_prioritized_and_resources_become_primary(monk
         deep_limit=1,
         include_comments=False,
         planned_queries=["STM32 PCB project"],
+        bilibili_search="on",
     )
 
     assert source.fetched[0].endswith("4")
@@ -1022,7 +1273,9 @@ def test_resource_bearing_video_is_prioritized_and_resources_become_primary(monk
 def test_successful_empty_search_is_not_reported_as_system_failure():
     source = FailingSearchSource([None])
 
-    report = DiscoveryPipeline(source).run("find STM32 code", include_comments=False)
+    report = DiscoveryPipeline(source).run(
+        "find STM32 code", include_comments=False, bilibili_search="on"
+    )
 
     assert report.run_status == "success"
     assert report.candidates_found == 0
@@ -1039,6 +1292,7 @@ def test_ai_planned_queries_override_deterministic_expansion():
         "一段自然语言需求",
         include_comments=False,
         planned_queries=planned,
+        bilibili_search="on",
     )
 
     assert report.expanded_queries == ["精确主题 官方题名", "精确主题 开源代码"]
@@ -1078,6 +1332,38 @@ def test_failed_discovery_does_not_replace_latest_success(tmp_path: Path):
     assert not list(tmp_path.rglob("*.tmp"))
 
 
+def test_previous_discovery_links_are_reused_as_cache_seeds(tmp_path: Path):
+    storage = FileStorage(tmp_path)
+    report = DiscoveryReport(
+        run_status="success",
+        requirement="cached natural-language need",
+        expanded_queries=["cached query"],
+        candidates_found=1,
+        deep_inspection_limit=1,
+        successful_queries=1,
+        candidates=[SearchCandidate(
+            source_id="BV1234567890",
+            webpage_url="https://www.bilibili.com/video/BV1234567890",
+            matched_queries=["cached query"],
+            best_rank=1,
+            discovery_score=1,
+        )],
+        resources=[ExternalResource(
+            locator="https://github.com/example/project",
+            kind="code_repository",
+            origin="public_web_direct",
+            access_status="public_page",
+            license_status="unverified",
+        )],
+    )
+    storage.save_discovery(report)
+
+    videos, resources = storage.load_discovery_seeds(report.requirement)
+
+    assert videos == ["https://www.bilibili.com/video/BV1234567890"]
+    assert resources == ["https://github.com/example/project"]
+
+
 def test_http_412_persists_client_cooldown_state(tmp_path: Path):
     storage = FileStorage(tmp_path)
     report = DiscoveryReport(
@@ -1098,12 +1384,28 @@ def test_http_412_persists_client_cooldown_state(tmp_path: Path):
     assert state["cooldown_state"] == "recommended"
     assert state["cooldown_reason"] == "risk_control"
     assert state["official_duration_known"] is False
-    assert state["cooldown_policy"] == "adaptive_5_15_30"
-    assert state["cooldown_minutes"] == 5
+    assert state["cooldown_policy"] == "adaptive_2_5_10"
+    assert state["cooldown_minutes"] == 2
     assert state["consecutive_412_count"] == 1
 
 
-def test_http_412_cooldown_escalates_and_resets_after_six_hours(tmp_path: Path):
+def test_repeated_non_412_searches_never_create_client_cooldown(tmp_path: Path):
+    storage = FileStorage(tmp_path)
+    for requirement in ("first natural-language search", "second natural-language search"):
+        storage.save_discovery(DiscoveryReport(
+            run_status="success",
+            requirement=requirement,
+            expanded_queries=[requirement],
+            candidates_found=0,
+            deep_inspection_limit=1,
+            stop_reason="candidate_target_reached",
+        ))
+
+    assert storage.active_cooldown() is None
+    assert not (tmp_path / "data" / "state" / "bilibili_cooldown.json").exists()
+
+
+def test_http_412_cooldown_escalates_and_resets_after_two_hours(tmp_path: Path):
     storage = FileStorage(tmp_path)
     first_at = datetime(2026, 8, 11, 2, 0, tzinfo=UTC)
 
@@ -1123,14 +1425,14 @@ def test_http_412_cooldown_escalates_and_resets_after_six_hours(tmp_path: Path):
         return storage.active_cooldown(now=at)
 
     first = save_412(first_at)
-    second = save_412(first_at + timedelta(minutes=6))
-    third = save_412(first_at + timedelta(minutes=22))
-    reset = save_412(first_at + timedelta(hours=7))
+    second = save_412(first_at + timedelta(minutes=3))
+    third = save_412(first_at + timedelta(minutes=9))
+    reset = save_412(first_at + timedelta(hours=3))
 
-    assert (first["cooldown_minutes"], first["consecutive_412_count"]) == (5, 1)
-    assert (second["cooldown_minutes"], second["consecutive_412_count"]) == (15, 2)
-    assert (third["cooldown_minutes"], third["consecutive_412_count"]) == (30, 3)
-    assert (reset["cooldown_minutes"], reset["consecutive_412_count"]) == (5, 1)
+    assert (first["cooldown_minutes"], first["consecutive_412_count"]) == (2, 1)
+    assert (second["cooldown_minutes"], second["consecutive_412_count"]) == (5, 2)
+    assert (third["cooldown_minutes"], third["consecutive_412_count"]) == (10, 3)
+    assert (reset["cooldown_minutes"], reset["consecutive_412_count"]) == (2, 1)
 
 
 def test_legacy_fixed_cooldown_is_read_as_first_adaptive_strike(tmp_path: Path):
@@ -1145,12 +1447,12 @@ def test_legacy_fixed_cooldown_is_read_as_first_adaptive_strike(tmp_path: Path):
         "official_duration_known": False,
     })
 
-    state = storage.active_cooldown(now=occurred_at + timedelta(minutes=4))
+    state = storage.active_cooldown(now=occurred_at + timedelta(minutes=1))
 
-    assert state["cooldown_minutes"] == 5
+    assert state["cooldown_minutes"] == 2
     assert state["consecutive_412_count"] == 1
     assert datetime.fromisoformat(state["recommended_not_before"]) == (
-        occurred_at + timedelta(minutes=5)
+        occurred_at + timedelta(minutes=2)
     )
 
 
@@ -1161,11 +1463,11 @@ def test_expired_cooldown_ignores_inconsistent_stored_deadline_and_cleans_state(
     storage._write_json(state_path, {
         "last_http_412_at": occurred_at.isoformat(),
         "recommended_not_before": (occurred_at + timedelta(hours=10)).isoformat(),
-        "cooldown_minutes": 5,
+        "cooldown_minutes": 2,
         "consecutive_412_count": 1,
     })
 
-    state = storage.active_cooldown(now=occurred_at + timedelta(minutes=6))
+    state = storage.active_cooldown(now=occurred_at + timedelta(minutes=3))
 
     assert state is None
     assert not state_path.exists()
@@ -1177,8 +1479,8 @@ def test_future_clock_skew_does_not_create_an_unbounded_cooldown(tmp_path: Path)
     state_path = tmp_path / "data" / "state" / "bilibili_cooldown.json"
     storage._write_json(state_path, {
         "last_http_412_at": (now + timedelta(hours=2)).isoformat(),
-        "recommended_not_before": (now + timedelta(hours=2, minutes=5)).isoformat(),
-        "cooldown_minutes": 5,
+        "recommended_not_before": (now + timedelta(hours=2, minutes=2)).isoformat(),
+        "cooldown_minutes": 2,
         "consecutive_412_count": 1,
     })
 

@@ -56,6 +56,15 @@ CONVERSATIONAL_TERMS = {
 }
 
 
+def _safe_urlparse(value: str):
+    try:
+        parsed = urlparse(value)
+        _ = parsed.hostname
+        return parsed
+    except ValueError:
+        return None
+
+
 def _normalized_terms(value: str) -> list[str]:
     return [
         item
@@ -188,8 +197,8 @@ def prepare_direct_resources(urls: list[str]) -> list[ExternalResource]:
         locator = value.strip().rstrip(".,;:!?")
         if not locator or locator in seen:
             continue
-        parsed = urlparse(locator)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        parsed = _safe_urlparse(locator)
+        if parsed is None or parsed.scheme not in {"http", "https"} or not parsed.netloc:
             continue
         seen.add(locator)
         kind, access = classify_resource(locator)
@@ -254,7 +263,10 @@ def extract_resources(raw: RawVideoData) -> list[ExternalResource]:
 
 
 def classify_resource(locator: str) -> tuple[str, str]:
-    host = urlparse(locator).netloc.lower()
+    parsed = _safe_urlparse(locator)
+    if parsed is None:
+        return "external_link", "invalid_url"
+    host = parsed.netloc.lower()
     if host in {
         "github.com",
         "www.github.com",
@@ -274,7 +286,7 @@ def classify_resource(locator: str) -> tuple[str, str]:
         return "bilibili_reference", "public_page"
     if "weixin.qq.com" in host or "mp.weixin.qq.com" in host:
         return "wechat_resource", "wechat_may_be_required"
-    if urlparse(locator).path.lower().endswith(".pdf"):
+    if parsed.path.lower().endswith(".pdf"):
         return "document", "public_page"
     return "external_link", "unverified"
 
@@ -414,7 +426,9 @@ def _inspect_gitee(resource: ExternalResource, timeout: int) -> list[str]:
 
 
 def _canonical_resource_key(locator: str) -> str:
-    parsed = urlparse(locator.strip())
+    parsed = _safe_urlparse(locator.strip())
+    if parsed is None:
+        return locator.strip().lower()
     host = parsed.netloc.lower().removeprefix("www.")
     path = parsed.path.rstrip("/").lower()
     return f"{host}{path}"
@@ -536,7 +550,11 @@ def inspect_external_resources(
         index += 1
         if resource.inspection_status == "inspected":
             continue
-        parsed = urlparse(resource.locator)
+        parsed = _safe_urlparse(resource.locator)
+        if parsed is None:
+            resource.inspection_status = "invalid_url"
+            resource.verification_notes.append("Malformed URL was skipped safely.")
+            continue
         host = parsed.netloc.lower()
         parts = [part for part in parsed.path.split("/") if part]
         nested_links: list[str] = []
@@ -756,12 +774,13 @@ class DiscoveryPipeline:
     def run(
         self,
         requirement: str,
-        max_candidates: int = 50,
+        max_candidates: int = 80,
         deep_limit: int = 8,
         include_comments: bool = True,
         planned_queries: list[str] | None = None,
         seed_video_urls: list[str] | None = None,
         seed_resource_urls: list[str] | None = None,
+        bilibili_search: str = "off",
         progress: Callable[[str], None] | None = None,
     ) -> DiscoveryReport:
         started_at = datetime.now(UTC)
@@ -771,6 +790,8 @@ class DiscoveryPipeline:
             raise ValueError("max_candidates must be between 10 and 200")
         if not 1 <= deep_limit <= 12:
             raise ValueError("deep_limit must be between 1 and 12")
+        if bilibili_search not in {"auto", "on", "off"}:
+            raise ValueError("bilibili_search must be auto, on, or off")
         if planned_queries:
             queries = list(dict.fromkeys(
                 " ".join(query.split())
@@ -792,15 +813,27 @@ class DiscoveryPipeline:
         stopped_at_query: str | None = None
         stop_reason: str | None = None
         failure_category: str | None = None
-        target = min(max_candidates, max(5, deep_limit))
-        skip_internal_search = len({hit.source_id for hit in hits}) >= target
+        search_target = min(max_candidates, max(5, deep_limit))
+        public_web_target = max(1, min(5, deep_limit))
+        public_video_count = len({hit.source_id for hit in hits})
+        skip_internal_search = (
+            bilibili_search == "off"
+            or (
+                bilibili_search == "auto"
+                and public_video_count >= public_web_target
+            )
+        )
         if skip_internal_search:
             skipped_queries = len(queries)
-            stop_reason = "web_candidate_target_reached"
+            stop_reason = (
+                "bilibili_search_disabled"
+                if bilibili_search == "off"
+                else "web_candidate_target_reached"
+            )
             events.append(DiscoveryEvent(
                 phase="candidate_discovery",
-                status="web_candidate_target_reached",
-                detail=f"{len(hits)} public-web video candidates",
+                status=stop_reason,
+                detail=f"{public_video_count} public-web video candidates",
             ))
         if (
             not skip_internal_search
@@ -864,7 +897,7 @@ class DiscoveryPipeline:
                     detail=f"{len(query_hits)} results",
                 ))
                 unique_hits = len({hit.source_id for hit in hits})
-                if unique_hits >= target and index < len(queries):
+                if unique_hits >= search_target and index < len(queries):
                     skipped_queries = len(queries) - index
                     stopped_at_query = query
                     stop_reason = "candidate_target_reached"
@@ -872,7 +905,7 @@ class DiscoveryPipeline:
                         phase="search",
                         status="stopped_early",
                         query=query,
-                        detail=f"candidate target reached: {unique_hits}/{target}",
+                        detail=f"candidate target reached: {unique_hits}/{search_target}",
                     ))
                     break
             except DataSourceError as exc:
@@ -955,43 +988,41 @@ class DiscoveryPipeline:
                 events=events,
                 evidence_limitations=limitations,
             )
-        scan_count = min(len(candidates), max(8, deep_limit * 3))
+        # Lightweight previews are the bridge between a broad candidate list and
+        # resource-first ranking. Keep this wider than deep inspection so a
+        # repository-bearing video is not hidden behind the first few results.
+        scan_count = min(len(candidates), max(8, min(16, deep_limit * 2)))
         if progress and scan_count:
             progress(f"Ranking {scan_count} candidates with lightweight metadata...")
         ranked_candidates = []
-        rejected_candidates = []
+        strict_filter = len(candidates) > 30
         for candidate in candidates[:scan_count]:
             is_seeded = "web_index" in candidate.provenance
+            if is_seeded:
+                # The public index already supplied a concrete video URL. Avoid
+                # spending an extra Bilibili API request merely to decide whether
+                # it is allowed into the bounded deep-inspection pool.
+                ranked_candidates.append((candidate.discovery_score, candidate))
+                events.append(DiscoveryEvent(
+                    phase="candidate_filter",
+                    status="retained_explicit_candidate",
+                    detail=candidate.source_id,
+                ))
+                continue
             try:
                 self._pace_bilibili_request()
                 preview = self.source.preview(candidate.webpage_url)
-                if not passes_hard_relevance(
+                if strict_filter and not passes_hard_relevance(
                     preview.title,
                     preview.description,
                     requirement,
                 ):
-                    if is_seeded:
-                        events.append(DiscoveryEvent(
-                            phase="candidate_filter",
-                            status="retained_explicit_candidate",
-                            detail=candidate.source_id,
-                        ))
-                    else:
-                        events.append(DiscoveryEvent(
-                            phase="candidate_filter",
-                            status="rejected",
-                            detail=candidate.source_id,
-                        ))
-                        relevance = preview_relevance(
-                            preview.title,
-                            preview.description,
-                            requirement,
-                        )
-                        rejected_candidates.append((
-                            relevance + min(2.0, candidate.discovery_score / 10),
-                            candidate,
-                        ))
-                        continue
+                    events.append(DiscoveryEvent(
+                        phase="candidate_filter",
+                        status="rejected",
+                        detail=candidate.source_id,
+                    ))
+                    continue
                 relevance = preview_relevance(
                     preview.title,
                     preview.description,
@@ -1032,13 +1063,9 @@ class DiscoveryPipeline:
                         evidence_limitations=limitations,
                     )
                 limitations.append(f"Could not preview {candidate.source_id}: {exc}")
-                if is_seeded:
-                    ranked_candidates.append((candidate.discovery_score, candidate))
                 continue
             except ValueError as exc:
                 limitations.append(f"Could not preview {candidate.source_id}: {exc}")
-                if is_seeded:
-                    ranked_candidates.append((candidate.discovery_score, candidate))
                 continue
             preview_links = _resource_locators(preview.description)
             project_links = sum(
@@ -1049,20 +1076,10 @@ class DiscoveryPipeline:
             combined = relevance + min(2.0, candidate.discovery_score / 10) + resource_signal
             ranked_candidates.append((combined, candidate))
         ranked_candidates.sort(key=lambda item: (-item[0], -item[1].discovery_score))
-        if not ranked_candidates and rejected_candidates:
-            rejected_candidates.sort(
-                key=lambda item: (-item[0], -item[1].discovery_score),
-            )
-            ranked_candidates = rejected_candidates[:deep_limit]
-            for _, candidate in ranked_candidates:
-                events.append(DiscoveryEvent(
-                    phase="candidate_filter",
-                    status="retained_filter_fallback",
-                    detail=candidate.source_id,
-                ))
+        if strict_filter and not ranked_candidates:
             limitations.append(
-                "All previewed candidates missed the strict relevance gate; the highest-ranked "
-                "bounded candidates were retained for description, subtitle, and comment evidence."
+                "All previewed internal-search candidates missed the strict relevance gate; "
+                "none were deep-inspected. Public-web candidates and direct resources were retained."
             )
         shortlist = [item[1] for item in ranked_candidates]
         videos = []

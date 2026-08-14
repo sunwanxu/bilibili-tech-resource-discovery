@@ -142,7 +142,10 @@ def interactive_edge_login(
     cookies: list[dict[str, Any]] = []
     user_agent = ""
     report("Opening a dedicated Microsoft Edge window for Bilibili login...")
-    report("Log in normally. Credentials remain in the browser and are never read by bhka.")
+    report(
+        "Log in normally. Only the Bilibili session needed for search is stored locally; "
+        "it is never displayed, uploaded, or written to reports."
+    )
     try:
         with (
             TemporaryDirectory(prefix="bhka-edge-login-") as profile,

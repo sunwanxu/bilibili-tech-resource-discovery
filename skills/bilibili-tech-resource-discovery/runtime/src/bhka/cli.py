@@ -22,6 +22,7 @@ from .discovery import (
 from .models import DiscoveryEvent, DiscoveryReport
 from .source import DataSourceError, YtDlpDataSource, normalize_bvid, select_representative_parts
 from .storage import FileStorage
+from .web_discovery import FirecrawlClient, FirecrawlError, discover_with_firecrawl
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="discover Bilibili videos and hidden resources from a natural-language need",
     )
     discover.add_argument("requirement")
-    discover.add_argument("--max-candidates", type=int, default=50)
+    discover.add_argument("--max-candidates", type=int, default=80)
     discover.add_argument("--deep", type=int, default=8, help="videos to inspect deeply (default: 8)")
     discover.add_argument(
         "--query",
@@ -96,6 +97,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="public project/resource URL supplied by the host AI; repeat as needed",
     )
     discover.add_argument(
+        "--web-search",
+        choices=["auto", "off", "firecrawl"],
+        default="auto",
+        help="optional public-web provider (default: use Firecrawl when configured)",
+    )
+    discover.add_argument(
+        "--bilibili-search",
+        choices=["auto", "on", "off"],
+        default="off",
+        help=(
+            "Bilibili internal candidate search (default: off; use on only for a bounded diagnostic)"
+        ),
+    )
+    discover.add_argument(
+        "--summary-json",
+        action="store_true",
+        help="emit a UTF-8 machine-readable result summary on stdout",
+    )
+    discover.add_argument(
         "--comments",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -106,6 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _configure_utf8_stdio()
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     settings = Settings.load(args.project_root)
@@ -122,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             print("Bilibili login configured locally.")
             print("isLogin: true")
-            print(f"Cookie store: {result.cookie_file}")
+            print("The Bilibili session was stored securely on this device.")
             return 0
         if args.command == "auth-status":
             try:
@@ -149,7 +170,87 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Status: {auth.status}")
             return 0 if auth.status == "valid" else 2
         if args.command == "discover":
-            print(f"Starting discovery with bhka {__version__}.", flush=True)
+            if not args.summary_json:
+                print(f"Starting discovery with bhka {__version__}.", flush=True)
+            seed_video_urls = list(args.seed_video_urls or [])
+            seed_resource_urls = list(args.seed_resource_urls or [])
+            public_web_events: list[DiscoveryEvent] = []
+            public_web_limitations: list[str] = []
+            cached_videos, cached_resources = storage.load_discovery_seeds(
+                args.requirement,
+                max_age_hours=settings.cache_ttl_hours,
+            )
+            seed_video_urls.extend(cached_videos)
+            seed_resource_urls.extend(cached_resources)
+            cache_sufficient = (
+                len(cached_videos) >= args.deep and len(cached_resources) >= 5
+            )
+            if cached_videos or cached_resources:
+                public_web_events.append(DiscoveryEvent(
+                    phase="local_cache",
+                    status="reused",
+                    detail=(
+                        f"{len(cached_videos)} video candidates and "
+                        f"{len(cached_resources)} resources"
+                    ),
+                ))
+            if args.web_search == "firecrawl" and not settings.firecrawl_api_key:
+                raise ValueError(
+                    "FIRECRAWL_API_KEY is required for --web-search firecrawl"
+                )
+            if (
+                args.web_search != "off"
+                and settings.firecrawl_api_key
+                and (not cache_sufficient or args.web_search == "firecrawl")
+            ):
+                if not args.summary_json:
+                    print(
+                        "Searching public web and open-project platforms with Firecrawl...",
+                        flush=True,
+                    )
+                firecrawl = FirecrawlClient(
+                    settings.firecrawl_api_key,
+                    base_url=settings.firecrawl_base_url,
+                    timeout_seconds=settings.firecrawl_timeout_seconds,
+                )
+                try:
+                    public_web = discover_with_firecrawl(
+                        firecrawl,
+                        args.requirement,
+                        per_query=settings.firecrawl_search_limit,
+                    )
+                    seed_video_urls.extend(public_web.video_urls)
+                    seed_resource_urls.extend(public_web.resource_urls)
+                    public_web_events.append(DiscoveryEvent(
+                        phase="public_web_search",
+                        status=("partial_success" if public_web.failures else "success"),
+                        detail=(
+                            f"Firecrawl returned {public_web.result_count} results, "
+                            f"{len(public_web.video_urls)} Bilibili candidates, and "
+                            f"{len(public_web.resource_urls)} direct resources"
+                        ),
+                    ))
+                    if public_web.failures:
+                        public_web_limitations.append(
+                            "Some optional Firecrawl queries failed; successful public-web "
+                            "results were retained."
+                        )
+                except FirecrawlError as exc:
+                    public_web_events.append(DiscoveryEvent(
+                        phase="public_web_search",
+                        status="failed",
+                        detail=exc.category,
+                    ))
+                    public_web_limitations.append(
+                        "Optional Firecrawl public-web discovery failed "
+                        f"({exc.category}); existing discovery continued."
+                    )
+                    if not args.summary_json:
+                        print(
+                            "Firecrawl public-web discovery was unavailable; "
+                            "continuing with existing sources.",
+                            flush=True,
+                        )
             cooldown = storage.active_cooldown()
             if cooldown:
                 queries = (
@@ -161,17 +262,18 @@ def main(argv: list[str] | None = None) -> int:
                     if args.planned_queries
                     else expand_queries(args.requirement)
                 )
-                print("Bilibili requests skipped during the local safety cooldown.")
-                print(
-                    "Adaptive client cooldown: "
-                    f"{cooldown['cooldown_minutes']} minutes "
-                    f"(strike {cooldown['consecutive_412_count']})."
-                )
-                print(f"Recommended not before: {cooldown['recommended_not_before']}")
+                if not args.summary_json:
+                    print("Bilibili requests skipped during the local safety cooldown.")
+                    print(
+                        "Adaptive client cooldown: "
+                        f"{cooldown['cooldown_minutes']} minutes "
+                        f"(strike {cooldown['consecutive_412_count']})."
+                    )
+                    print(f"Recommended not before: {cooldown['recommended_not_before']}")
                 seeded_candidates = aggregate_candidates(seed_video_results(
-                    args.seed_video_urls or [], args.requirement
+                    seed_video_urls, args.requirement
                 ))[:args.max_candidates]
-                direct_resources = prepare_direct_resources(args.seed_resource_urls or [])
+                direct_resources = prepare_direct_resources(seed_resource_urls)
                 ranked_resources = rank_resources(merge_resource_pool(direct_resources))
                 report = DiscoveryReport(
                     run_status=(
@@ -207,11 +309,32 @@ def main(argv: list[str] | None = None) -> int:
                     deep_limit=args.deep,
                     include_comments=args.comments,
                     planned_queries=args.planned_queries,
-                    seed_video_urls=args.seed_video_urls,
-                    seed_resource_urls=args.seed_resource_urls,
-                    progress=lambda message: print(message, flush=True),
+                    seed_video_urls=seed_video_urls,
+                    seed_resource_urls=seed_resource_urls,
+                    bilibili_search=args.bilibili_search,
+                    progress=(
+                        None
+                        if args.summary_json
+                        else lambda message: print(message, flush=True)
+                    ),
                 )
+            report.events = [*public_web_events, *report.events]
+            report.evidence_limitations.extend(public_web_limitations)
             json_path, report_path = storage.save_discovery(report)
+            if args.summary_json:
+                print(json.dumps({
+                    "run_status": report.run_status,
+                    "failure_category": report.failure_category,
+                    "stop_reason": report.stop_reason,
+                    "candidates_found": report.candidates_found,
+                    "videos_inspected": len(report.videos),
+                    "resources_found": len(report.resources),
+                    "candidate_urls": [item.webpage_url for item in report.candidates],
+                    "resource_urls": [item.locator for item in report.resources],
+                    "json_path": str(json_path),
+                    "report_path": str(report_path),
+                }, ensure_ascii=False))
+                return 1 if report.run_status == "failed" else 0
             print(f"Candidates found: {report.candidates_found}")
             print(f"Videos inspected: {len(report.videos)}")
             print(f"Usable resource findings: {len(report.resources)}")
@@ -315,6 +438,16 @@ def main(argv: list[str] | None = None) -> int:
     print(f"JSON saved: {json_path}")
     print(f"Report saved: {report_path}")
     return 0
+
+
+def _configure_utf8_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
 
 
 def _authentication_label(settings: Settings) -> str:
