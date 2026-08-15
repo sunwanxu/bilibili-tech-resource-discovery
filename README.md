@@ -8,7 +8,7 @@
 寻找真正有用的教程、源码、PCB、设计资料与技术路线。
 
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Version](https://img.shields.io/badge/version-1.0.1-6f42c1)](https://github.com/sunwanxu/bilibili-tech-resource-discovery/releases/tag/v1.0.1)
+[![Version](https://img.shields.io/badge/version-1.0.2-6f42c1)](https://github.com/sunwanxu/bilibili-tech-resource-discovery/releases/tag/v1.0.2)
 [![License: MIT](https://img.shields.io/badge/License-MIT-2ea44f.svg)](LICENSE)
 [![Agent Skill](https://img.shields.io/badge/Agent%20Skill-Codex%20%7C%20OpenCode-111827)](skills/bilibili-tech-resource-discovery)
 
@@ -102,7 +102,7 @@ python install.py
 安装器会保留已有的项目托管登录，使用普通 wheel 安装私有运行环境，并验证：
 
 ```text
-Runtime verified: bhka 1.0.1
+Runtime verified: bhka 1.0.2
 ```
 
 </details>
