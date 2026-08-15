@@ -95,3 +95,13 @@ def test_one_command_install_accepts_known_host_and_isolated_home(
     assert commands[0][2:5] == ["--agent", "opencode", "--force"]
     assert commands[0][-3:] == ["--home", str(isolated_home), "--no-login"]
     assert "--state-from" not in commands[0]
+
+
+def test_windows_launcher_bootstraps_pinned_uv_without_global_path_changes() -> None:
+    launcher = (SCRIPT.parent / "install-windows.cmd").read_text(encoding="utf-8")
+
+    assert "uv-0.11.32" in launcher
+    assert "https://astral.sh/uv/0.11.32/install.ps1" in launcher
+    assert "UV_UNMANAGED_INSTALL" in launcher
+    assert "UV_NO_MODIFY_PATH" in launcher
+    assert '"%BHKA_UV_EXE%" run --no-project --python 3.13' in launcher

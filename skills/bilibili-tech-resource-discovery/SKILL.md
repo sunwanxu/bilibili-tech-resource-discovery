@@ -29,6 +29,11 @@ If the portable runtime is missing, run:
 python <skill>/scripts/install.py --agent <current-host> --force --no-login
 ```
 
+On Windows, if Python is not already available, run the repository's `install-windows.cmd` instead.
+It installs a pinned uv executable under the user's local application-data folder, lets uv obtain a
+private Python runtime, and then runs the same installer. It does not modify the system Python or
+global `PATH`.
+
 Do not open a login window until the user agrees. Explain the choice simply:
 
 - Login: better access to subtitles and comments; a private Edge window and credential file remain

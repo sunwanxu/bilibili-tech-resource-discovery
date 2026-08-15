@@ -24,6 +24,10 @@ python <skill>/scripts/install.py --agent opencode --force --no-login
 When a person runs `install-windows.cmd` or `python install.py` directly, the installer asks the same
 question. A noninteractive install safely skips login unless `--login` is explicit.
 
+`install-windows.cmd` does not require preinstalled Python. When Python is absent, it installs pinned
+uv 0.11.32 into `%LOCALAPPDATA%\bilibili-tech-resource-discovery\tools`, without changing the global
+`PATH`, and uv downloads a private Python runtime. This follows uv's official unmanaged-install path.
+
 The installer copies the complete Skill, builds a private non-editable Python environment, preserves
 existing `.auth`, reports, data, and `.env`, and verifies both the stable and v1 commands. It does not
 read a daily Edge profile, use DPAPI, require Firefox, or install a Cookie extension.
@@ -48,7 +52,7 @@ label missing subtitle/comment evidence rather than declaring that no resources 
 
 | Symptom | Meaning | Safe recovery |
 |---|---|---|
-| Python 3.11+ missing | Installer cannot create its private runtime | Install official Python for Windows, then rerun the single installer. |
+| Python is missing | The bootstrap must obtain its own runtime | Run `install-windows.cmd`; it uses pinned uv and a private Python automatically. |
 | Private environment incomplete | An install was interrupted or files were locked | Rerun the installer with `--force`; it can switch to a fresh environment. |
 | Edge window does not open | Edge is unavailable or blocked by policy | Continue public mode; do not fall back to unknown extensions. |
 | Login times out | The visible login was not completed | Ask whether to open the private login window once more. |
