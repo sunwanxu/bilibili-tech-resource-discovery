@@ -19,6 +19,7 @@ from .contracts import (
     VerificationScope,
 )
 from .pipeline import PlatformCircuitBreak, V1DiscoveryPipeline
+from .search_page import SearchPageCandidateParser
 
 __all__ = [
     "Breadth",
@@ -33,6 +34,7 @@ __all__ = [
     "RetentionPolicy",
     "RunEvent",
     "RunOutcome",
+    "SearchPageCandidateParser",
     "V1DiscoveryPipeline",
     "VerificationScope",
 ]
