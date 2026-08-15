@@ -7,7 +7,7 @@
 系统会先理解你最终想要的是“学习”还是“搭建”：学习时快速给出视频课程与观看顺序；搭建时联合网页索引、B 站内容证据与开源项目平台，验证并排序源码、PCB 工程、设计资料和技术路线。
 
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Version](https://img.shields.io/badge/version-0.8.0-6f42c1)](https://github.com/sunwanxu/bilibili-tech-resource-discovery)
+[![Version](https://img.shields.io/badge/version-1.0.0-6f42c1)](https://github.com/sunwanxu/bilibili-tech-resource-discovery/releases/tag/v1.0.0)
 [![License: MIT](https://img.shields.io/badge/License-MIT-2ea44f.svg)](LICENSE)
 [![Agent Skill](https://img.shields.io/badge/Agent%20Skill-Codex%20%7C%20OpenCode-111827)](skills/bilibili-tech-resource-discovery)
 
@@ -127,7 +127,7 @@ Skill 自带运行源码和跨客户端安装器，不依赖仓库其他目录�
 安装器会验证实际执行的是 Skill 自带版本：
 
 ```text
-Runtime verified: bhka 0.8.0
+Runtime verified: bhka 1.0.0
 ```
 
 > [!TIP]

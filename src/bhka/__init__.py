@@ -1,3 +1,3 @@
-"""Bilibili Hidden Knowledge Analyzer, phase 1."""
+"""Bilibili technical learning and open-source resource discovery."""
 
-__version__ = "0.8.0"
+__version__ = "1.0.0"

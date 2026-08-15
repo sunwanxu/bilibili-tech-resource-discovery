@@ -18,8 +18,8 @@ the active private environment from `<runtime>/.venv-path` when that file exists
 - Windows login command: `<environment>/Scripts/bhka-v1.exe login`
 - macOS/Linux equivalents live under `<environment>/bin/`
 
-Never use a bare command from `PATH`. The v1 engine is isolated from the stable v0.8 command while
-acceptance testing is in progress.
+Never use a bare command from `PATH`. `bhka-v1` is the Skill's stable natural-language discovery
+entry point; the separate `bhka` command remains available for legacy compatibility.
 
 ## First use
 

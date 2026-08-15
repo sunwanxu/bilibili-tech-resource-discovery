@@ -1,8 +1,4 @@
-"""Version-one pipeline contracts.
-
-The v1 package is intentionally isolated from the v0.8 runtime until its user-flow and
-low-rate network tests pass.
-"""
+"""Version-one natural-language discovery pipeline."""
 
 from .cache import SQLiteCheckpointStore
 from .contracts import (

@@ -61,7 +61,7 @@ def _resource_count(value: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bhka-v1",
-        description="Draft v1 Bilibili technical-video and resource discovery engine",
+        description="Bilibili technical-video and open-source resource discovery engine",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     discover = subparsers.add_parser("discover", help="Search from one natural-language need")

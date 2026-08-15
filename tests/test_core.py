@@ -323,7 +323,7 @@ def test_cli_exposes_runtime_version(capsys):
         cli_module.main(["--version"])
 
     assert exit_info.value.code == 0
-    assert capsys.readouterr().out.strip() == "bhka 0.8.0"
+    assert capsys.readouterr().out.strip() == "bhka 1.0.0"
 
 
 def test_discover_defaults_use_broad_hybrid_candidate_discovery():

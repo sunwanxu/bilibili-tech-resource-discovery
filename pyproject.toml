@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bilibili-hidden-knowledge-agent"
-version = "0.8.0"
-description = "Phase-1 Bilibili technical-video value analyzer"
+version = "1.0.0"
+description = "Natural-language Bilibili technical learning and open-source resource discovery"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

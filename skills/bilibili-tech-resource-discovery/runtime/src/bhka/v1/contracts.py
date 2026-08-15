@@ -200,7 +200,7 @@ class RunEvent(BaseModel):
 
 
 class RunOutcome(BaseModel):
-    schema_version: str = "1.0.0-draft"
+    schema_version: str = "1.0.0"
     run_id: str = Field(
         default_factory=lambda: (
             datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ") + "-" + uuid4().hex[:8]
