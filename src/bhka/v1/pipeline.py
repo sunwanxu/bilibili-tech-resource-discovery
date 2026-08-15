@@ -40,6 +40,15 @@ class CandidateReadError(RuntimeError):
         self.detail = detail
 
 
+class DiscoveryFailure(RuntimeError):
+    """A bounded failure of one discovery adapter."""
+
+    def __init__(self, code: str, detail: str | None = None):
+        super().__init__(detail or code)
+        self.code = code
+        self.detail = detail
+
+
 class ResourceVerificationFailure(RuntimeError):
     """A bounded failure for one external resource."""
 
@@ -139,6 +148,18 @@ class V1DiscoveryPipeline:
                 )
                 self.store.record_event("discovery", "circuit_open", exc.code)
                 continue
+            except DiscoveryFailure as exc:
+                events.append(
+                    RunEvent(
+                        phase="discovery",
+                        status="failed",
+                        code=exc.code,
+                        detail=exc.detail or query.text,
+                        request_kind="bilibili",
+                    )
+                )
+                self.store.record_event("discovery", "failed", exc.code)
+                break
             candidates = merge_candidates(candidates, found)
             self.store.save_candidates(intent, candidates)
             events.append(
@@ -272,7 +293,8 @@ class V1DiscoveryPipeline:
             intent=intent,
             query_plan=plan,
             budget=budget,
-            candidates=selected,
+            candidates=ranked,
+            selected_candidates=selected,
             evidence=evidence,
             resources=resources,
             events=events,

@@ -27,11 +27,14 @@ from .contracts import (
 from .evidence_reader import YtDlpEvidenceReader
 from .pipeline import (
     CandidateReadError,
+    DiscoveryFailure,
     PlatformCircuitBreak,
     ResourceVerificationFailure,
     V1DiscoveryPipeline,
 )
+from .planner import StableQueryPlanner
 from .ranking import DeterministicCandidateRanker
+from .reporting import ReportWriter
 from .resource_extraction import EvidenceResourceExtractor
 from .resource_verification import ResourceVerifierRouter
 from .search_page import SearchPageCandidateParser
@@ -43,6 +46,7 @@ __all__ = [
     "CandidateReadError",
     "DeterministicCandidateRanker",
     "DiscoveryCandidate",
+    "DiscoveryFailure",
     "DiscoveryMode",
     "EvidenceRecord",
     "EvidenceResourceExtractor",
@@ -52,6 +56,7 @@ __all__ = [
     "PlatformCircuitBreak",
     "QueryPlan",
     "QuerySpec",
+    "ReportWriter",
     "ResourceAccessStatus",
     "ResourceKind",
     "ResourceLicenseStatus",
@@ -64,6 +69,7 @@ __all__ = [
     "RunOutcome",
     "SQLiteCheckpointStore",
     "SearchPageCandidateParser",
+    "StableQueryPlanner",
     "V1DiscoveryPipeline",
     "VerificationScope",
     "YtDlpEvidenceReader",

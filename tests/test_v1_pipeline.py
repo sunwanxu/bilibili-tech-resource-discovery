@@ -118,7 +118,7 @@ def test_412_during_search_stops_all_deep_reads_and_keeps_candidates():
     result = pipeline.run(intent(), budget=NetworkBudget())
 
     assert result.status == "partial_success"
-    assert [item.canonical_id for item in result.candidates] == ["BV1"]
+    assert [item.canonical_id for item in result.selected_candidates] == ["BV1"]
     assert reader.calls == 0
     assert result.budget.circuit_reason == "http_412"
     assert any(event.phase == "deep_read" and event.status == "skipped" for event in result.events)

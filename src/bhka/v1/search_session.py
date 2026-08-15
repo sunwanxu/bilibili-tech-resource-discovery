@@ -10,7 +10,7 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from .contracts import DiscoveryCandidate, NetworkBudget, QuerySpec
-from .pipeline import PlatformCircuitBreak
+from .pipeline import DiscoveryFailure, PlatformCircuitBreak
 from .search_page import SearchPageCandidateParser
 
 SEARCH_URL = "https://search.bilibili.com/all"
@@ -144,7 +144,10 @@ class BilibiliSearchPageDiscoverer:
         *,
         budget: NetworkBudget,
     ) -> list[DiscoveryCandidate]:
-        snapshot = self.session.search(query.text)
+        try:
+            snapshot = self.session.search(query.text)
+        except SearchSessionError as exc:
+            raise DiscoveryFailure("browser_search_failed", str(exc)) from exc
         if snapshot.status_code == 412:
             raise PlatformCircuitBreak("http_412", "Bilibili search returned HTTP 412")
         return self.parser.parse(snapshot.html, query=query.text)

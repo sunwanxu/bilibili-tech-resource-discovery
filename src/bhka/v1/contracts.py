@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -53,7 +54,7 @@ class QueryPlan(BaseModel):
     queries: list[QuerySpec] = Field(min_length=1, max_length=4)
     candidate_target: int = Field(default=20, ge=5, le=80)
     selected_target: int = Field(default=8, ge=3, le=20)
-    deep_read_target: int = Field(default=6, ge=1, le=15)
+    deep_read_target: int = Field(default=6, ge=0, le=15)
 
     @model_validator(mode="after")
     def validate_targets(self) -> QueryPlan:
@@ -191,11 +192,19 @@ class RunEvent(BaseModel):
 
 class RunOutcome(BaseModel):
     schema_version: str = "1.0.0-draft"
+    run_id: str = Field(
+        default_factory=lambda: (
+            datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ") + "-" + uuid4().hex[:8]
+        )
+    )
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    completed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     status: Literal["success", "partial_success", "failed"]
     intent: IntentProfile
     query_plan: QueryPlan
     budget: NetworkBudget
     candidates: list[DiscoveryCandidate] = Field(default_factory=list)
+    selected_candidates: list[DiscoveryCandidate] = Field(default_factory=list)
     evidence: list[EvidenceRecord] = Field(default_factory=list)
     resources: list[ResourceRecord] = Field(default_factory=list)
     events: list[RunEvent] = Field(default_factory=list)
