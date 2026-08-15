@@ -8,6 +8,7 @@ from .contracts import DiscoveryCandidate
 
 _VIDEO_ID_RE = re.compile(r"(?i)(BV[0-9A-Za-z]{10}|av\d+)(?=$|[/?#])")
 _NUMERIC_VIDEO_PATH_RE = re.compile(r"(?i)/video/(\d+)(?=$|[/?#])")
+_DURATION_RE = re.compile(r"\b\d{1,3}:\d{2}(?::\d{2})?\b")
 
 
 def canonical_video_id(value: str) -> str | None:
@@ -28,6 +29,22 @@ def canonical_video_id(value: str) -> str | None:
     if numeric:
         return f"av{numeric.group(1)}"
     return None
+
+
+def _title_quality(value: str) -> tuple[int, int]:
+    """Prefer semantic title anchors over thumbnail overlays for the same video."""
+
+    normalized = " ".join(value.split())
+    if not normalized:
+        return (-1_000, 0)
+    score = min(len(normalized), 80)
+    if "稍后再看" in normalized:
+        score -= 200
+    if _DURATION_RE.search(normalized):
+        score -= 40
+    meaningful = sum(character.isalpha() or "\u4e00" <= character <= "\u9fff" for character in normalized)
+    score += meaningful * 2
+    return (score, len(normalized))
 
 
 class _VideoAnchorParser(HTMLParser):
@@ -88,6 +105,6 @@ class SearchPageCandidateParser:
                     provenance=["bilibili_search_page"],
                     matched_queries=[query],
                 )
-            elif not candidates[key].title and title:
+            elif _title_quality(title) > _title_quality(candidates[key].title):
                 candidates[key].title = title
         return list(candidates.values())

@@ -20,13 +20,16 @@ from .contracts import (
 )
 from .pipeline import PlatformCircuitBreak, V1DiscoveryPipeline
 from .search_page import SearchPageCandidateParser
+from .search_session import BilibiliSearchPageDiscoverer, ManagedEdgeSearchSession
 
 __all__ = [
+    "BilibiliSearchPageDiscoverer",
     "Breadth",
     "DiscoveryCandidate",
     "DiscoveryMode",
     "EvidenceRecord",
     "IntentProfile",
+    "ManagedEdgeSearchSession",
     "NetworkBudget",
     "PlatformCircuitBreak",
     "QueryPlan",
