@@ -9,6 +9,7 @@ from .contracts import (
     IntentProfile,
     NetworkBudget,
     QuerySpec,
+    RetentionPolicy,
 )
 
 
@@ -42,6 +43,7 @@ class EvidenceReader(Protocol):
         *,
         budget: NetworkBudget,
         include_comments: bool,
+        retention: RetentionPolicy,
     ) -> Iterable[EvidenceRecord]: ...
 
 

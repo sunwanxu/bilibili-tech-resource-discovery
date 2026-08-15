@@ -19,7 +19,8 @@ from .contracts import (
     RunOutcome,
     VerificationScope,
 )
-from .pipeline import PlatformCircuitBreak, V1DiscoveryPipeline
+from .evidence_reader import YtDlpEvidenceReader
+from .pipeline import CandidateReadError, PlatformCircuitBreak, V1DiscoveryPipeline
 from .ranking import DeterministicCandidateRanker
 from .search_page import SearchPageCandidateParser
 from .search_session import BilibiliSearchPageDiscoverer, ManagedEdgeSearchSession
@@ -27,6 +28,7 @@ from .search_session import BilibiliSearchPageDiscoverer, ManagedEdgeSearchSessi
 __all__ = [
     "BilibiliSearchPageDiscoverer",
     "Breadth",
+    "CandidateReadError",
     "DeterministicCandidateRanker",
     "DiscoveryCandidate",
     "DiscoveryMode",
@@ -44,4 +46,5 @@ __all__ = [
     "SearchPageCandidateParser",
     "V1DiscoveryPipeline",
     "VerificationScope",
+    "YtDlpEvidenceReader",
 ]

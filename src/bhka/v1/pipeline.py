@@ -24,6 +24,15 @@ class PlatformCircuitBreak(RuntimeError):
         self.detail = detail
 
 
+class CandidateReadError(RuntimeError):
+    """A bounded failure for one candidate that must not abort the full run."""
+
+    def __init__(self, code: str, detail: str | None = None):
+        super().__init__(detail or code)
+        self.code = code
+        self.detail = detail
+
+
 class QueryPlanner(Protocol):
     def plan(self, intent: IntentProfile) -> QueryPlan: ...
 
@@ -155,6 +164,7 @@ class V1DiscoveryPipeline:
                             candidate,
                             budget=budget,
                             include_comments=intent.mode.value == "resource",
+                            retention=intent.retention,
                         )
                     )
                 except PlatformCircuitBreak as exc:
@@ -170,6 +180,18 @@ class V1DiscoveryPipeline:
                     )
                     self.store.record_event("deep_read", "circuit_open", exc.code)
                     break
+                except CandidateReadError as exc:
+                    events.append(
+                        RunEvent(
+                            phase="deep_read",
+                            status="failed",
+                            code=exc.code,
+                            detail=exc.detail or candidate.canonical_id,
+                            request_kind="bilibili",
+                        )
+                    )
+                    self.store.record_event("deep_read", "failed", exc.code)
+                    continue
                 evidence.extend(records)
                 self.store.save_evidence(records)
                 events.append(
@@ -181,7 +203,8 @@ class V1DiscoveryPipeline:
                     )
                 )
 
-        if candidates and budget.circuit_open:
+        has_failures = any(event.status in {"failed", "circuit_open"} for event in events)
+        if candidates and (budget.circuit_open or has_failures):
             status = "partial_success"
         elif not candidates:
             status = "failed"

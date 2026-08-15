@@ -9,7 +9,7 @@ from bhka.v1.contracts import (
     QueryPlan,
     QuerySpec,
 )
-from bhka.v1.pipeline import PlatformCircuitBreak, V1DiscoveryPipeline
+from bhka.v1.pipeline import CandidateReadError, PlatformCircuitBreak, V1DiscoveryPipeline
 
 
 def intent() -> IntentProfile:
@@ -84,7 +84,7 @@ class Reader:
     def __init__(self):
         self.calls = 0
 
-    def read(self, candidate, *, budget, include_comments):
+    def read(self, candidate, *, budget, include_comments, retention):
         self.calls += 1
         return [
             EvidenceRecord(
@@ -152,3 +152,34 @@ def test_candidate_target_stops_followup_query_and_checkpoints_each_deep_read():
     assert reader.calls == 2
     assert store.evidence_checkpoints == 2
     assert any(event.code == "candidate_target_reached" for event in result.events)
+
+
+class FirstCandidateFailsReader(Reader):
+    def read(self, candidate, *, budget, include_comments, retention):
+        if candidate.canonical_id == "BV0":
+            raise CandidateReadError("invalid_candidate")
+        return super().read(
+            candidate,
+            budget=budget,
+            include_comments=include_comments,
+            retention=retention,
+        )
+
+
+def test_one_bad_candidate_does_not_discard_following_checkpoints():
+    reader = FirstCandidateFailsReader()
+    store = Store()
+    pipeline = V1DiscoveryPipeline(
+        planner=Planner(candidate_target=5),
+        discoverer=EnoughDiscoverer(),
+        ranker=Ranker(),
+        reader=reader,
+        store=store,
+    )
+
+    result = pipeline.run(intent(), budget=NetworkBudget())
+
+    assert result.status == "partial_success"
+    assert len(result.evidence) == 1
+    assert store.evidence_checkpoints == 1
+    assert any(event.code == "invalid_candidate" for event in result.events)
