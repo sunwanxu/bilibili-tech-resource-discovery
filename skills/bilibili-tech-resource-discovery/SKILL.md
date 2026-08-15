@@ -53,7 +53,26 @@ installation or login fails.
 ## Understand the request before searching
 
 Build a small internal profile containing the goal, current level, hard constraints, result type,
-resource volume, and verification scope. Ask one question at a time and no more than three questions.
+resource volume, and verification scope. Ask one short question at a time. Use adaptive depth rather
+than a fixed question limit: stop when another answer would not materially change the queries,
+ranking, evidence collection, or verification. Never present a long questionnaire all at once, and
+never repeat information the user already supplied.
+
+Use the problem to decide what remains worth asking:
+
+- A clear, simple request may need only one or two confirmations.
+- A learning request may need the mode, current level, desired endpoint, available time, preferred
+  language, or software version—but ask only items that change the learning path.
+- A resource request may need the exact artifact type, fixed hardware/software, acceptable platform,
+  approximate quantity, inspiration versus direct reuse, verification depth, and license/commercial
+  constraints.
+- A complex build or competition problem may justify four to seven progressive questions about the
+  current design, known constraints, failed approaches, required deliverables, and desired alternative
+  routes. Skip every item already clear from the conversation.
+
+Keep a silent checklist of goal, mode, level, constraints, expected deliverable, quantity, and
+verification. Ask the highest-impact unresolved item next. If the user says “直接搜索”“先搜再说” or
+otherwise wants to stop answering, stop immediately and apply the stable defaults below.
 
 For each new need, first ask unless the user already selected a named mode or explicitly requested no
 questions: “这次更想要哪种结果：1）学习路线和教程，2）搜索可用的开源资料或方案，3）两者
@@ -69,14 +88,14 @@ answer to `--resource-style curated`; map inspiration, broad exploration, or rou
 `--resource-style inspiration`. Pass an explicit approximate count with `--resource-count`. Large
 mode expands public-web and candidate coverage; it does not imply that every lead is deeply checked.
 
-For `resource` or `both`, ask within the three-question limit: “是否对找到的资源进行检查？核心检查
+For `resource` or `both`, ask when not already answered: “是否对找到的资源进行检查？核心检查
 会确认最重要链接的访问、文件和许可证；全部检查更慢；不检查则只作为灵感线索。” Map the
 answer to `none`, `core`, or `all`. In inspiration mode, `core` checks only the strongest subset and
 retains the rest as clearly unverified leads. Never silently choose `none` for a usable/open-source
 request.
 
-Use remaining questions only when the goal, level, or fixed hardware/software constraint is genuinely
-unclear. If the user asks to search immediately, use stable defaults: `learning` for an explicitly
+Ask additional questions only when the goal, level, deliverable, or fixed hardware/software constraint
+is genuinely unclear and would change the result. If the user asks to search immediately, use stable defaults: `learning` for an explicitly
 learning-only request, otherwise `resource`; curated standard breadth, core verification, minimal
 retention, and no optional API key.
 

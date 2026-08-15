@@ -301,6 +301,17 @@ def test_skill_ui_metadata_is_valid_utf8_and_user_facing() -> None:
     assert f"${portable.SKILL_NAME}" in interface["default_prompt"]
 
 
+def test_skill_questionnaire_is_adaptive_and_user_stoppable() -> None:
+    skill = Path(__file__).parents[1] / "skills" / portable.SKILL_NAME
+    instructions = (skill / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "adaptive depth" in instructions
+    assert "no more than three questions" not in instructions
+    assert "four to seven" in instructions
+    assert "直接搜索" in instructions
+    assert "never repeat information" in instructions
+
+
 def test_portable_installer_verifies_the_exact_bundled_runtime_version(
     tmp_path: Path,
     monkeypatch,
