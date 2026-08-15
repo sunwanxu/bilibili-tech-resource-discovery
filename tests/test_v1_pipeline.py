@@ -50,6 +50,10 @@ class Ranker:
 @dataclass
 class Store:
     cached: list[DiscoveryCandidate] = field(default_factory=list)
+    cached_evidence: dict[str, list[EvidenceRecord]] = field(default_factory=dict)
+    cached_resources: dict[tuple[str, VerificationScope], ResourceRecord] = field(
+        default_factory=dict
+    )
     candidate_checkpoints: int = 0
     evidence_checkpoints: int = 0
     resource_checkpoints: int = 0
@@ -58,6 +62,15 @@ class Store:
     def load_candidates(self, _intent):
         return list(self.cached)
 
+    def load_evidence(self, subject_id, *, include_comments, retention):
+        records = self.cached_evidence.get(subject_id)
+        if records is None:
+            return None
+        return [record.model_copy(update={"cached": True}) for record in records]
+
+    def load_resource(self, locator, *, scope):
+        return self.cached_resources.get((locator, scope))
+
     def save_candidates(self, _intent, candidates):
         self.cached = list(candidates)
         self.candidate_checkpoints += 1
@@ -65,7 +78,25 @@ class Store:
     def save_evidence(self, evidence):
         self.evidence_checkpoints += 1
 
-    def save_resources(self, resources):
+    def save_evidence_snapshot(
+        self,
+        subject_id,
+        evidence,
+        *,
+        include_comments,
+        retention,
+    ):
+        self.cached_evidence[subject_id] = list(evidence)
+        self.evidence_checkpoints += 1
+
+    def save_resources(
+        self,
+        resources,
+        *,
+        verification_scope=VerificationScope.NONE,
+    ):
+        for resource in resources:
+            self.cached_resources[(resource.locator, verification_scope)] = resource
         self.resource_checkpoints += 1
 
     def record_event(self, phase, status, code=None):
@@ -208,7 +239,11 @@ class Extractor:
 
 
 class Verifier:
+    def __init__(self):
+        self.calls = 0
+
     def verify(self, resource, *, budget, scope):
+        self.calls += 1
         budget.consume_external()
         verified = resource.model_copy(deep=True)
         verified.access_status = ResourceAccessStatus.ACCESSIBLE
@@ -235,6 +270,88 @@ def test_pipeline_checkpoints_extracted_and_verified_resources():
     assert len(result.resources) == 1
     assert result.resources[0].license_name == "MIT"
     assert store.resource_checkpoints == 2
+
+
+def test_second_run_reuses_evidence_without_new_bilibili_requests():
+    store = Store()
+    reader = Reader()
+    discoverer = EnoughDiscoverer()
+    pipeline = V1DiscoveryPipeline(
+        planner=Planner(candidate_target=5),
+        discoverer=discoverer,
+        ranker=Ranker(),
+        reader=reader,
+        store=store,
+    )
+
+    pipeline.run(intent(), budget=NetworkBudget())
+    result = pipeline.run(
+        intent(),
+        budget=NetworkBudget(bilibili_requests_limit=0),
+    )
+
+    assert discoverer.calls == 1
+    assert reader.calls == 2
+    assert len(result.evidence) == 2
+    assert all(record.cached for record in result.evidence)
+    assert result.budget.bilibili_requests_used == 0
+    assert sum(event.status == "cache_hit" for event in result.events) == 3
+
+
+def test_cached_evidence_remains_usable_after_discovery_opens_circuit():
+    store = Store(
+        cached_evidence={
+            "BV1": [
+                EvidenceRecord(
+                    evidence_id="e-BV1",
+                    subject_id="BV1",
+                    source_kind="description",
+                    source_url="https://www.bilibili.com/video/BV1",
+                )
+            ]
+        }
+    )
+    reader = Reader()
+    pipeline = V1DiscoveryPipeline(
+        planner=Planner(),
+        discoverer=CircuitDiscoverer(),
+        ranker=Ranker(),
+        reader=reader,
+        store=store,
+    )
+
+    result = pipeline.run(intent(), budget=NetworkBudget())
+
+    assert result.budget.circuit_open is True
+    assert reader.calls == 0
+    assert len(result.evidence) == 1
+    assert result.evidence[0].cached is True
+    assert any(event.phase == "deep_read" and event.status == "cache_hit" for event in result.events)
+
+
+def test_second_run_reuses_resource_verification_without_external_request():
+    store = Store()
+    verifier = Verifier()
+    pipeline = V1DiscoveryPipeline(
+        planner=Planner(candidate_target=5),
+        discoverer=EnoughDiscoverer(),
+        ranker=Ranker(),
+        reader=Reader(),
+        store=store,
+        resource_extractor=Extractor(),
+        resource_verifier=verifier,
+    )
+
+    pipeline.run(intent(), budget=NetworkBudget())
+    result = pipeline.run(intent(), budget=NetworkBudget())
+
+    assert verifier.calls == 1
+    assert result.budget.external_requests_used == 0
+    assert result.resources[0].license_name == "MIT"
+    assert any(
+        event.phase == "resource_verification" and event.status == "cache_hit"
+        for event in result.events
+    )
 
 
 def test_resource_check_can_be_declined_without_losing_links():

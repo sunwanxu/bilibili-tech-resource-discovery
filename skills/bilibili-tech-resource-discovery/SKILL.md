@@ -131,6 +131,25 @@ Use `--deep-read 0` for a discovery-only smoke test. Standard defaults inspect t
 deep breadth inspects six. Do not repeatedly rerun the same request: use the SQLite checkpoints and
 `reports/v1/latest.json`.
 
+## Reuse completed work automatically
+
+The runtime keeps a private local SQLite cache under `<runtime>/data/v1/`. A repeated or overlapping
+request should reuse fresh video evidence and resource verification before making another network
+request. The user does not need to enable, clear, or manage this cache.
+
+- Cached descriptions, subtitles, and requested comment coverage remain reusable for seven days.
+- Cached resource access and license checks remain reusable for seven days.
+- A cache entry is used only when it satisfies the current request: evidence without comments cannot
+  satisfy a comment-enabled read, minimal excerpts cannot satisfy full-evidence retention, and core
+  resource verification cannot satisfy an all-files check.
+- Cache hits consume no Bilibili or external request budget and remain usable when the Bilibili
+  circuit is open.
+- Report cache hits as reused local evidence, not as a new live check. The JSON evidence records set
+  `cached: true`, and run events use `status: cache_hit`.
+
+Do not tell users to delete the cache to bypass HTTP 412. Expired or insufficient entries refresh
+naturally on a later permitted request; Bilibili-side risk control is independent of the local cache.
+
 ## Rank without deleting the search space
 
 Keep the complete deduplicated candidate pool in the report and separately select the strongest

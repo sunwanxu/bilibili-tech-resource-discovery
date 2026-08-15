@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bilibili-hidden-knowledge-agent"
-version = "1.0.0"
+version = "1.0.1"
 description = "Portable runtime for the Bilibili technical-resource discovery Skill"
 requires-python = ">=3.11"
 dependencies = [
