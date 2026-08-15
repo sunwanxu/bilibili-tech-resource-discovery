@@ -20,6 +20,7 @@ class Breadth(StrEnum):
 
 
 class VerificationScope(StrEnum):
+    NONE = "none"
     CORE = "core"
     ALL = "all"
 

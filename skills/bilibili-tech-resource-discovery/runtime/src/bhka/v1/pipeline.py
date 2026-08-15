@@ -11,6 +11,7 @@ from .contracts import (
     QueryPlan,
     RunEvent,
     RunOutcome,
+    VerificationScope,
 )
 from .ports import (
     CandidateDiscoverer,
@@ -249,7 +250,17 @@ class V1DiscoveryPipeline:
         )
         if resources:
             self.store.save_resources(resources)
-        if self.resource_verifier is not None:
+        if resources and intent.verification_scope == VerificationScope.NONE:
+            events.append(
+                RunEvent(
+                    phase="resource_verification",
+                    status="skipped",
+                    code="resource_verification_disabled",
+                    detail="Resource links were retained without access, artifact, or license checks",
+                    request_kind="external",
+                )
+            )
+        elif self.resource_verifier is not None:
             for index, resource in enumerate(resources):
                 try:
                     verified = self.resource_verifier.verify(

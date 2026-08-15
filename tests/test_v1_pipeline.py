@@ -12,6 +12,7 @@ from bhka.v1.contracts import (
     ResourceKind,
     ResourceLicenseStatus,
     ResourceRecord,
+    VerificationScope,
 )
 from bhka.v1.pipeline import CandidateReadError, PlatformCircuitBreak, V1DiscoveryPipeline
 
@@ -233,3 +234,29 @@ def test_pipeline_checkpoints_extracted_and_verified_resources():
     assert len(result.resources) == 1
     assert result.resources[0].license_name == "MIT"
     assert store.resource_checkpoints == 2
+
+
+def test_resource_check_can_be_declined_without_losing_links():
+    store = Store()
+    verifier = Verifier()
+    request = intent().model_copy(
+        update={"verification_scope": VerificationScope.NONE}
+    )
+    pipeline = V1DiscoveryPipeline(
+        planner=Planner(candidate_target=5),
+        discoverer=EnoughDiscoverer(),
+        ranker=Ranker(),
+        reader=Reader(),
+        store=store,
+        resource_extractor=Extractor(),
+        resource_verifier=verifier,
+    )
+    budget = NetworkBudget()
+
+    result = pipeline.run(request, budget=budget)
+
+    assert len(result.resources) == 1
+    assert result.resources[0].locator == "https://github.com/acme/board"
+    assert result.resources[0].license_status == ResourceLicenseStatus.NO_EVIDENCE
+    assert budget.external_requests_used == 0
+    assert any(event.code == "resource_verification_disabled" for event in result.events)

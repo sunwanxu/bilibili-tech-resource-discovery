@@ -25,6 +25,14 @@ def test_parser_exposes_v1_private_login_command():
     assert args.timeout_minutes == 7
 
 
+def test_parser_allows_user_to_decline_resource_verification():
+    args = build_parser().parse_args(
+        ["discover", "寻找 PCB 工程", "--verification", "none"]
+    )
+
+    assert args.verification == "none"
+
+
 def test_mixed_need_exits_with_machine_readable_clarification(capsys):
     exit_code = main(["discover", "我想学习 PCB 并找开源代码"])
     payload = json.loads(capsys.readouterr().out)

@@ -57,11 +57,14 @@ breadth, and verification scope. Ask progressively and ask no more than three sh
 
 1. If the goal is unclear, ask what the user wants to learn or build.
 2. If it changes recommendations, ask their current level or fixed hardware/software constraints.
-3. For resource searches, ask whether to verify only the most promising projects (faster) or every
-   candidate (slower and uses more external requests).
+3. For resource searches, ask: “是否对找到的资源进行检查？检查会确认链接能否访问、包含哪些
+   文件以及是否有明确开源许可，但会花费更多时间。” If the user declines, keep links as
+   unverified leads and make no external verification requests. If the user agrees, use core
+   verification by default; verify every candidate only when they explicitly request full checking.
 
 If the user says to search directly or provides enough detail, use stable defaults: standard breadth,
-core verification, minimal local retention, and no optional API key.
+core verification, minimal local retention, and no optional API key. Do not silently choose `none`
+when the request explicitly asks for usable or open-source resources.
 
 Choose a mode:
 
