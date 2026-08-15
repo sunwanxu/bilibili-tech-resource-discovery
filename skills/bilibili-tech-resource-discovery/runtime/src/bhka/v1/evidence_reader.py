@@ -12,7 +12,7 @@ from .contracts import (
     NetworkBudget,
     RetentionPolicy,
 )
-from .pipeline import CandidateReadError, PlatformCircuitBreak
+from .errors import CandidateReadError, PlatformCircuitBreak
 
 
 class BoundedVideoSource(Protocol):

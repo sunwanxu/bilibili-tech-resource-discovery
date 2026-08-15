@@ -11,7 +11,7 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from .contracts import DiscoveryCandidate, NetworkBudget, QuerySpec
-from .pipeline import DiscoveryFailure, PlatformCircuitBreak
+from .errors import DiscoveryFailure, PlatformCircuitBreak
 from .search_page import SearchPageCandidateParser
 
 SEARCH_URL = "https://search.bilibili.com/all"

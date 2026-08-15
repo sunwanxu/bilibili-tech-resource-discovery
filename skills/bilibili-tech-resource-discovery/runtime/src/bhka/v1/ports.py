@@ -8,11 +8,18 @@ from .contracts import (
     EvidenceRecord,
     IntentProfile,
     NetworkBudget,
+    QueryPlan,
     QuerySpec,
     ResourceRecord,
     RetentionPolicy,
     VerificationScope,
 )
+
+
+class QueryPlanner(Protocol):
+    """Turn one structured intent into a bounded query plan."""
+
+    def plan(self, intent: IntentProfile) -> QueryPlan: ...
 
 
 class CandidateDiscoverer(Protocol):
