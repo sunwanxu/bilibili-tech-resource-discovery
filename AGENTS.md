@@ -2,7 +2,19 @@
 
 ## Project Structure & Module Organization
 
-The package uses a narrow pipeline. `src/bhka/source.py` is the only Bilibili-facing adapter and converts `yt-dlp` output into models from `src/bhka/models.py`. `src/bhka/analyzers.py` contains interchangeable OpenAI and heuristic analyzers; neither should fetch platform data. `src/bhka/storage.py` persists source evidence under `data/raw/`, analysis JSON under `data/processed/`, and Markdown under `reports/`. Research findings and decisions live in `docs/`. Tests use synthetic data and must not contact Bilibili.
+The package uses a staged pipeline. `src/bhka/v1/contracts.py` owns persisted and cross-module contracts; `ports.py` owns replaceable boundaries; `planner.py`, `ranking.py`, `resource_extraction.py`, and `reporting.py` remain deterministic; network access belongs only in search, evidence-reader, login, or resource-verifier adapters. `pipeline.py` coordinates these modules but must not absorb their implementation details. The legacy `src/bhka/source.py` remains the single yt-dlp adapter for compatibility. The distributable Skill runtime mirrors `src/bhka`; tests must detect drift. Research findings and decisions live in `docs/`. Tests use synthetic data and must not contact Bilibili.
+
+## Open-Source-First Engineering
+
+Before designing a subsystem, adding a substantial feature, or fixing a complex integration failure, search official documentation, upstream issues, and maintained open-source implementations. Evaluate each candidate for license compatibility, maintenance, Windows support, dependency weight, privacy, security, and replaceability. Record the decision as one of: adopt, wrap, reference, or reject. Write a new implementation only when no suitable option exists, and then implement the smallest replaceable module with offline tests and a short explanation of why existing options were insufficient.
+
+Repeat this review at each relevant stage: product and architecture discovery, per-module design, integration failures, search/ranking changes, packaging, authentication, caching, UI, and evaluation. Prefer official standards and existing adapters over custom protocols. Do not introduce an open-source dependency merely because it exists; wrap external capabilities behind project-owned protocols so they can be replaced without changing the pipeline.
+
+## Module Boundaries
+
+Keep intent intake, query planning, candidate discovery, normalization, ranking, Bilibili evidence reading, resource extraction, resource verification, caching, request policy, and reporting separate. Each module should have one primary reason to change and exchange typed contracts rather than raw third-party payloads or ad hoc dictionaries. Ranking must not fetch data; reporting must not make network requests; adapters must not decide product-level value; cache and circuit-breaker policy must apply across the run rather than being reimplemented per adapter.
+
+When adding a provider, implement an existing port or introduce the smallest general port needed by at least one real use case. Avoid domain-specific allowlists and blacklists in the core. A failure in one candidate or provider must not discard completed work from other modules. Preserve checkpoints and explicit partial-success semantics at module boundaries.
 
 ## Build, Test, and Development Commands
 
