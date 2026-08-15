@@ -7,6 +7,7 @@ from .contracts import DiscoveryCandidate, DiscoveryMode, IntentProfile
 
 _LATIN_TOKEN_RE = re.compile(r"[a-z0-9]+(?:[-_.][a-z0-9]+)*", re.IGNORECASE)
 _CJK_CHUNK_RE = re.compile(r"[\u3400-\u9fff]+")
+_PROBLEM_LETTER_RE = re.compile(r"(?<![A-Za-z])([A-Z])\s*题", re.IGNORECASE)
 _LEARNING_MARKERS = ("教程", "入门", "从零", "实战", "原理", "详解", "系列", "全流程")
 _RESOURCE_MARKERS = (
     "开源",
@@ -25,12 +26,42 @@ _RESOURCE_MARKERS = (
 def _terms(value: str) -> set[str]:
     normalized = value.casefold()
     terms = {match.group(0) for match in _LATIN_TOKEN_RE.finditer(normalized)}
+    terms.update(
+        f"problem:{match.group(1).casefold()}" for match in _PROBLEM_LETTER_RE.finditer(value)
+    )
     for chunk in _CJK_CHUNK_RE.findall(normalized):
         if len(chunk) <= 4:
             terms.add(chunk)
         for size in (2, 3):
             terms.update(chunk[index : index + size] for index in range(len(chunk) - size + 1))
     return {term for term in terms if term.strip()}
+
+
+def _technical_anchors(value: str) -> set[str]:
+    anchors = {
+        f"problem:{match.group(1).casefold()}" for match in _PROBLEM_LETTER_RE.finditer(value)
+    }
+    for match in _LATIN_TOKEN_RE.finditer(value):
+        original = match.group(0)
+        normalized = original.casefold()
+        if (
+            any(character.isdigit() for character in normalized)
+            or any(separator in normalized for separator in "-_.")
+            or (original.isupper() and 2 <= len(original) <= 10)
+        ):
+            anchors.add(normalized)
+    return anchors
+
+
+def _anchor_matches(anchor: str, terms: set[str]) -> bool:
+    compact = re.sub(r"[-_.]", "", anchor)
+    return any(re.sub(r"[-_.]", "", term) == compact for term in terms)
+
+
+def _anchor_weight(anchor: str, *, title: bool) -> float:
+    if anchor.startswith("problem:") or any(character.isdigit() for character in anchor):
+        return 28 if title else 10
+    return 10 if title else 4
 
 
 def _similarity(left: DiscoveryCandidate, right: DiscoveryCandidate) -> float:
@@ -52,6 +83,9 @@ class DeterministicCandidateRanker:
         goal_terms = _terms(
             " ".join([intent.goal, intent.original_request, *intent.constraints])
         )
+        goal_anchors = _technical_anchors(
+            " ".join([intent.goal, intent.original_request, *intent.constraints])
+        )
         scored: list[DiscoveryCandidate] = []
         markers = _LEARNING_MARKERS if intent.mode == DiscoveryMode.LEARNING else _RESOURCE_MARKERS
         for original in candidates:
@@ -62,6 +96,20 @@ class DeterministicCandidateRanker:
             summary_overlap = goal_terms & summary_terms
             score = len(title_overlap) * 4 + len(summary_overlap) * 1.5
             reasons = []
+            title_anchor_hits = sorted(
+                anchor for anchor in goal_anchors if _anchor_matches(anchor, title_terms)
+            )
+            summary_anchor_hits = sorted(
+                anchor
+                for anchor in goal_anchors
+                if anchor not in title_anchor_hits and _anchor_matches(anchor, summary_terms)
+            )
+            if title_anchor_hits:
+                score += sum(_anchor_weight(anchor, title=True) for anchor in title_anchor_hits)
+                reasons.append(f"technical_anchors:{','.join(title_anchor_hits)}")
+            if summary_anchor_hits:
+                score += sum(_anchor_weight(anchor, title=False) for anchor in summary_anchor_hits)
+                reasons.append(f"summary_technical_anchors:{','.join(summary_anchor_hits)}")
             if title_overlap:
                 reasons.append(f"title_overlap:{','.join(sorted(title_overlap)[:5])}")
             if summary_overlap:
@@ -107,4 +155,3 @@ class DeterministicCandidateRanker:
                 creator_key = chosen.creator_name.casefold()
                 creator_counts[creator_key] = creator_counts.get(creator_key, 0) + 1
         return selected
-

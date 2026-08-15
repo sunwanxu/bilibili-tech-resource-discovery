@@ -49,3 +49,36 @@ def test_ranker_keeps_weak_candidates_and_softly_diversifies_duplicates():
     assert ranked[-1].canonical_id == "BV4"
     assert any("diversity_adjusted_order" in item.local_score_reasons for item in ranked)
 
+
+def test_model_and_acronym_anchors_outweigh_generic_chinese_overlap():
+    intent = IntentProfile(
+        original_request="寻找 ESP32-C3 MQTT 智能家居开源代码",
+        goal="寻找 ESP32-C3 MQTT 智能家居开源代码",
+        mode=DiscoveryMode.RESOURCE,
+    )
+    candidates = [
+        candidate("BV1", "【开源】智能家居配置教程和代码"),
+        candidate("BV2", "ESP32C3 使用 MQTT 连接云端实战"),
+    ]
+
+    ranked = DeterministicCandidateRanker().rank(intent, candidates)
+
+    assert ranked[0].canonical_id == "BV2"
+    assert any(reason.startswith("technical_anchors:") for reason in ranked[0].local_score_reasons)
+
+
+def test_problem_letter_anchor_ranks_requested_problem_before_other_open_projects():
+    intent = IntentProfile(
+        original_request="寻找 2025 电赛 K题小车开源方案",
+        goal="寻找 2025 电赛 K题小车开源方案",
+        mode=DiscoveryMode.RESOURCE,
+    )
+    candidates = [
+        candidate("BV1", "【开源】2025 电赛 E题完整方案"),
+        candidate("BV2", "2025 电赛 K题自动避障小车"),
+    ]
+
+    ranked = DeterministicCandidateRanker().rank(intent, candidates)
+
+    assert ranked[0].canonical_id == "BV2"
+    assert any("problem:k" in reason for reason in ranked[0].local_score_reasons)
