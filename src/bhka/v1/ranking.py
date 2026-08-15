@@ -87,7 +87,11 @@ class DeterministicCandidateRanker:
             " ".join([intent.goal, intent.original_request, *intent.constraints])
         )
         scored: list[DiscoveryCandidate] = []
-        markers = _LEARNING_MARKERS if intent.mode == DiscoveryMode.LEARNING else _RESOURCE_MARKERS
+        markers = {
+            DiscoveryMode.LEARNING: _LEARNING_MARKERS,
+            DiscoveryMode.RESOURCE: _RESOURCE_MARKERS,
+            DiscoveryMode.BOTH: (*_LEARNING_MARKERS, *_RESOURCE_MARKERS),
+        }[intent.mode]
         for original in candidates:
             candidate = original.model_copy(deep=True)
             title_terms = _terms(candidate.title)

@@ -17,6 +17,7 @@ from .contracts import (
     EvidenceRecord,
     IntentProfile,
     NetworkBudget,
+    ResourceSearchStyle,
     RunEvent,
     RunOutcome,
     VerificationScope,
@@ -50,6 +51,13 @@ def infer_mode(request: str) -> DiscoveryMode | None:
     return DiscoveryMode.RESOURCE
 
 
+def _resource_count(value: str) -> int:
+    count = int(value)
+    if not 1 <= count <= 50:
+        raise argparse.ArgumentTypeError("resource count must be between 1 and 50")
+    return count
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bhka-v1",
@@ -61,8 +69,18 @@ def build_parser() -> argparse.ArgumentParser:
     discover.add_argument("--goal")
     discover.add_argument("--level")
     discover.add_argument("--constraint", action="append", default=[])
-    discover.add_argument("--mode", choices=["auto", "learning", "resource"], default="auto")
+    discover.add_argument(
+        "--mode",
+        choices=["auto", *[item.value for item in DiscoveryMode]],
+        default="auto",
+    )
     discover.add_argument("--breadth", choices=[item.value for item in Breadth], default="standard")
+    discover.add_argument(
+        "--resource-style",
+        choices=[item.value for item in ResourceSearchStyle],
+        default=ResourceSearchStyle.CURATED.value,
+    )
+    discover.add_argument("--resource-count", type=_resource_count)
     discover.add_argument("--verification", choices=[item.value for item in VerificationScope], default="core")
     discover.add_argument("--query", action="append", default=[])
     discover.add_argument("--candidate-url", action="append", default=[])
@@ -115,6 +133,8 @@ def _intent_from_args(args: argparse.Namespace) -> IntentProfile | None:
         user_level=args.level,
         constraints=args.constraint,
         breadth=Breadth(args.breadth),
+        resource_search_style=ResourceSearchStyle(args.resource_style),
+        desired_resource_count=args.resource_count,
         verification_scope=VerificationScope(args.verification),
     )
 

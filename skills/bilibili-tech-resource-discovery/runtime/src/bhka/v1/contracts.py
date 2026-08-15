@@ -11,6 +11,12 @@ from pydantic import BaseModel, Field, model_validator
 class DiscoveryMode(StrEnum):
     LEARNING = "learning"
     RESOURCE = "resource"
+    BOTH = "both"
+
+
+class ResourceSearchStyle(StrEnum):
+    CURATED = "curated"
+    INSPIRATION = "inspiration"
 
 
 class Breadth(StrEnum):
@@ -39,6 +45,8 @@ class IntentProfile(BaseModel):
     user_level: str | None = None
     constraints: list[str] = Field(default_factory=list)
     breadth: Breadth = Breadth.STANDARD
+    resource_search_style: ResourceSearchStyle = ResourceSearchStyle.CURATED
+    desired_resource_count: int | None = Field(default=None, ge=1, le=50)
     verification_scope: VerificationScope = VerificationScope.CORE
     retention: RetentionPolicy = RetentionPolicy.MINIMAL
     login_allowed: bool = False

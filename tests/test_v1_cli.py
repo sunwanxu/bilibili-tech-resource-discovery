@@ -34,6 +34,25 @@ def test_parser_allows_user_to_decline_resource_verification():
     assert args.verification == "none"
 
 
+def test_parser_accepts_both_mode_and_large_inspiration_count():
+    args = build_parser().parse_args(
+        [
+            "discover",
+            "学习 PCB 并寻找设计灵感",
+            "--mode",
+            "both",
+            "--resource-style",
+            "inspiration",
+            "--resource-count",
+            "30",
+        ]
+    )
+
+    assert args.mode == "both"
+    assert args.resource_style == "inspiration"
+    assert args.resource_count == 30
+
+
 def test_host_video_candidates_accept_numeric_av_and_bv_urls():
     candidates = _seed_candidates(
         ["116136268144356", "https://www.bilibili.com/video/BV1At421h7Ui"]

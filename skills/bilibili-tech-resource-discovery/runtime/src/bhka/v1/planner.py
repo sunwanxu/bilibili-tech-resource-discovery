@@ -3,7 +3,14 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-from .contracts import Breadth, DiscoveryMode, IntentProfile, QueryPlan, QuerySpec
+from .contracts import (
+    Breadth,
+    DiscoveryMode,
+    IntentProfile,
+    QueryPlan,
+    QuerySpec,
+    ResourceSearchStyle,
+)
 
 _RESOURCE_INTENT_WORDS = (
     "开源代码",
@@ -11,10 +18,22 @@ _RESOURCE_INTENT_WORDS = (
     "项目资料",
     "设计方案",
     "不同技术路线",
+    "搜索",
+    "寻找",
+    "开源",
+    "灵感",
     "源码",
     "资源",
+    "资料",
 )
-_LEARNING_INTENT_WORDS = ("适合我的能力", "中文教程", "学习路线", "怎么学", "如何学习")
+_LEARNING_INTENT_WORDS = (
+    "适合我的能力",
+    "中文教程",
+    "学习路线",
+    "怎么学",
+    "如何学习",
+    "学习",
+)
 
 
 def _normalized_query(value: str) -> str:
@@ -23,7 +42,12 @@ def _normalized_query(value: str) -> str:
 
 def _base_topic(intent: IntentProfile) -> str:
     value = intent.goal or intent.original_request
-    removable = _RESOURCE_INTENT_WORDS if intent.mode == DiscoveryMode.RESOURCE else _LEARNING_INTENT_WORDS
+    if intent.mode == DiscoveryMode.BOTH:
+        removable = (*_RESOURCE_INTENT_WORDS, *_LEARNING_INTENT_WORDS)
+    elif intent.mode == DiscoveryMode.RESOURCE:
+        removable = _RESOURCE_INTENT_WORDS
+    else:
+        removable = _LEARNING_INTENT_WORDS
     for phrase in removable:
         value = value.replace(phrase, " ")
     value = re.sub(r"\s+", " ", value).strip(" ，,。")
@@ -57,10 +81,18 @@ class StableQueryPlanner:
             topic = _base_topic(intent)
             texts = [topic]
             if intent.breadth != Breadth.FAST:
-                suffix = "教程 实战" if intent.mode == DiscoveryMode.LEARNING else "开源 源码 工程"
+                suffix = {
+                    DiscoveryMode.LEARNING: "教程 实战",
+                    DiscoveryMode.RESOURCE: "开源 源码 工程",
+                    DiscoveryMode.BOTH: "教程 开源 工程",
+                }[intent.mode]
                 texts.append(f"{topic} {suffix}")
             if intent.breadth == Breadth.DEEP:
-                suffix = "系列 全流程" if intent.mode == DiscoveryMode.LEARNING else "项目资料 设计方案"
+                suffix = {
+                    DiscoveryMode.LEARNING: "系列 全流程",
+                    DiscoveryMode.RESOURCE: "项目资料 设计方案",
+                    DiscoveryMode.BOTH: "学习路线 项目资料 设计方案",
+                }[intent.mode]
                 texts.append(f"{topic} {suffix}")
         defaults = {
             Breadth.FAST: (12, 5, 2),
@@ -68,6 +100,13 @@ class StableQueryPlanner:
             Breadth.DEEP: (45, 12, 6),
         }
         candidate_target, selected_target, deep_read_target = defaults[intent.breadth]
+        if intent.resource_search_style == ResourceSearchStyle.INSPIRATION:
+            candidate_target = max(candidate_target, 60)
+            selected_target = max(selected_target, 15)
+            deep_read_target = min(deep_read_target, 3)
+        if intent.desired_resource_count is not None:
+            candidate_target = min(80, max(candidate_target, intent.desired_resource_count * 3))
+            selected_target = min(20, max(selected_target, intent.desired_resource_count))
         return QueryPlan(
             queries=[
                 QuerySpec(
@@ -85,4 +124,3 @@ class StableQueryPlanner:
                 else deep_read_target
             ),
         )
-

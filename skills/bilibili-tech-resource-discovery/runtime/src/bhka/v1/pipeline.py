@@ -6,10 +6,12 @@ from typing import Protocol
 
 from .contracts import (
     DiscoveryCandidate,
+    DiscoveryMode,
     EvidenceRecord,
     IntentProfile,
     NetworkBudget,
     QueryPlan,
+    ResourceSearchStyle,
     RunEvent,
     RunOutcome,
     VerificationScope,
@@ -246,7 +248,10 @@ class V1DiscoveryPipeline:
                         self.reader.read(
                             candidate,
                             budget=budget,
-                            include_comments=intent.mode.value == "resource",
+                            include_comments=intent.mode in {
+                                DiscoveryMode.RESOURCE,
+                                DiscoveryMode.BOTH,
+                            },
                             retention=intent.retention,
                         )
                     )
@@ -304,7 +309,26 @@ class V1DiscoveryPipeline:
                 )
             )
         elif self.resource_verifier is not None:
-            for index, resource in enumerate(resources):
+            verification_limit = len(resources)
+            if (
+                intent.resource_search_style == ResourceSearchStyle.INSPIRATION
+                and intent.verification_scope == VerificationScope.CORE
+            ):
+                verification_limit = min(5, len(resources))
+                if len(resources) > verification_limit:
+                    events.append(
+                        RunEvent(
+                            phase="resource_verification",
+                            status="skipped",
+                            code="inspiration_mode_core_subset",
+                            detail=(
+                                f"Verified the first {verification_limit} resources; retained "
+                                f"{len(resources) - verification_limit} additional inspiration leads"
+                            ),
+                            request_kind="external",
+                        )
+                    )
+            for index, resource in enumerate(resources[:verification_limit]):
                 try:
                     verified = self.resource_verifier.verify(
                         resource,

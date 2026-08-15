@@ -52,26 +52,33 @@ installation or login fails.
 
 ## Understand the request before searching
 
-Build a small internal profile containing the goal, current level, hard constraints, desired result,
-breadth, and verification scope. Ask progressively and ask no more than three short questions.
+Build a small internal profile containing the goal, current level, hard constraints, result type,
+resource volume, and verification scope. Ask one question at a time and no more than three questions.
 
-1. If the goal is unclear, ask what the user wants to learn or build.
-2. If it changes recommendations, ask their current level or fixed hardware/software constraints.
-3. For resource searches, ask: “是否对找到的资源进行检查？检查会确认链接能否访问、包含哪些
-   文件以及是否有明确开源许可，但会花费更多时间。” If the user declines, keep links as
-   unverified leads and make no external verification requests. If the user agrees, use core
-   verification by default; verify every candidate only when they explicitly request full checking.
+For each new need, first ask unless the user already selected a named mode or explicitly requested no
+questions: “这次更想要哪种结果：1）学习路线和教程，2）搜索可用的开源资料或方案，3）两者
+都要？” Do not silently infer the result type merely from words such as “学习”“PCB” or “开源”.
 
-If the user says to search directly or provides enough detail, use stable defaults: standard breadth,
-core verification, minimal local retention, and no optional API key. Do not silently choose `none`
-when the request explicitly asks for usable or open-source resources.
+- `learning`: understanding, tutorials, courses, and a viewing path.
+- `resource`: reusable code, PCB/EDA files, models, data, projects, or design inspiration.
+- `both`: return a learning path and a separately ranked resource collection.
 
-Choose a mode:
+If the user chooses `resource` or `both`, next ask: “希望精选少量高价值资料，还是进入大量探索
+模式寻找灵感？也可以直接告诉我大约需要多少个，例如 10 个或 30 个。” Map a small curated
+answer to `--resource-style curated`; map inspiration, broad exploration, or roughly 20+ items to
+`--resource-style inspiration`. Pass an explicit approximate count with `--resource-count`. Large
+mode expands public-web and candidate coverage; it does not imply that every lead is deeply checked.
 
-- `learning`: the main outcome is understanding, tutorials, courses, or a viewing path.
-- `resource`: the main outcome is reusable code, PCB/EDA files, models, data, or project materials.
-- If both are explicit, ask which outcome to prioritize. Do not infer resource mode merely from a
-  technology word such as PCB.
+For `resource` or `both`, ask within the three-question limit: “是否对找到的资源进行检查？核心检查
+会确认最重要链接的访问、文件和许可证；全部检查更慢；不检查则只作为灵感线索。” Map the
+answer to `none`, `core`, or `all`. In inspiration mode, `core` checks only the strongest subset and
+retains the rest as clearly unverified leads. Never silently choose `none` for a usable/open-source
+request.
+
+Use remaining questions only when the goal, level, or fixed hardware/software constraint is genuinely
+unclear. If the user asks to search immediately, use stable defaults: `learning` for an explicitly
+learning-only request, otherwise `resource`; curated standard breadth, core verification, minimal
+retention, and no optional API key.
 
 ## Plan broad but bounded searches
 
@@ -88,7 +95,7 @@ collect URLs. Numeric AV ids, `av...`, BV ids, and full Bilibili video URLs are 
 Run the engine with one natural-language request:
 
 ```text
-<bhka-v1> discover "<user request>" --mode <learning-or-resource> --breadth standard --verification core --query "<precise query>" --project-root <runtime>
+<bhka-v1> discover "<user request>" --mode <learning-resource-or-both> --breadth standard --resource-style <curated-or-inspiration> --resource-count <approximate-count> --verification core --query "<precise query>" --project-root <runtime>
 ```
 
 When Bilibili search is disabled or a run-wide circuit is already open, use
@@ -152,7 +159,8 @@ the latest useful result. JSON is UTF-8 and is the preferred agent transport.
 ## Answer the user
 
 For learning mode, lead with a three-to-five-video viewing path, explain why each suits the user's
-level, then list useful alternatives. For resource mode, lead with usable project links and state:
+level, then list useful alternatives. For resource mode, lead with usable project links. For `both`,
+present the viewing path first and a distinct resource section second. For every resource result state:
 
 - exact, partial, or inspiration-only fit;
 - useful artifacts found and important artifacts not evidenced;

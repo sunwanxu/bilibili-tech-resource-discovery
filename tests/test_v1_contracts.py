@@ -8,6 +8,7 @@ from bhka.v1.contracts import (
     NetworkBudget,
     QueryPlan,
     QuerySpec,
+    ResourceSearchStyle,
     RetentionPolicy,
     VerificationScope,
 )
@@ -24,6 +25,20 @@ def test_intent_profile_has_stable_user_safe_defaults():
     assert profile.verification_scope == VerificationScope.CORE
     assert profile.retention == RetentionPolicy.MINIMAL
     assert profile.login_allowed is False
+
+
+def test_intent_profile_supports_both_mode_and_inspiration_volume():
+    profile = IntentProfile(
+        original_request="学习 PCB 并寻找大量开源设计灵感",
+        goal="边学习边对比开源项目",
+        mode=DiscoveryMode.BOTH,
+        resource_search_style=ResourceSearchStyle.INSPIRATION,
+        desired_resource_count=30,
+    )
+
+    assert profile.mode == DiscoveryMode.BOTH
+    assert profile.resource_search_style == ResourceSearchStyle.INSPIRATION
+    assert profile.desired_resource_count == 30
 
 
 def test_query_plan_is_small_and_progressive():
@@ -62,4 +77,3 @@ def test_http_412_opens_one_run_wide_circuit():
     assert budget.circuit_reason == "http_412"
     with pytest.raises(RuntimeError):
         budget.consume_bilibili()
-

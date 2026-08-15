@@ -12,6 +12,7 @@ from bhka.v1.contracts import (
     ResourceKind,
     ResourceLicenseStatus,
     ResourceRecord,
+    ResourceSearchStyle,
     VerificationScope,
 )
 from bhka.v1.pipeline import CandidateReadError, PlatformCircuitBreak, V1DiscoveryPipeline
@@ -260,3 +261,39 @@ def test_resource_check_can_be_declined_without_losing_links():
     assert result.resources[0].license_status == ResourceLicenseStatus.NO_EVIDENCE
     assert budget.external_requests_used == 0
     assert any(event.code == "resource_verification_disabled" for event in result.events)
+
+
+class ManyResourcesExtractor:
+    def extract(self, evidence):
+        return [
+            ResourceRecord(
+                locator=f"https://github.com/acme/board-{index}",
+                repository_root=f"https://github.com/acme/board-{index}",
+                host="github.com",
+                kind=ResourceKind.REPOSITORY,
+            )
+            for index in range(8)
+        ]
+
+
+def test_inspiration_mode_core_verifies_subset_and_retains_all_leads():
+    request = intent().model_copy(
+        update={"resource_search_style": ResourceSearchStyle.INSPIRATION}
+    )
+    pipeline = V1DiscoveryPipeline(
+        planner=Planner(candidate_target=5),
+        discoverer=EnoughDiscoverer(),
+        ranker=Ranker(),
+        reader=Reader(),
+        store=Store(),
+        resource_extractor=ManyResourcesExtractor(),
+        resource_verifier=Verifier(),
+    )
+    budget = NetworkBudget()
+
+    result = pipeline.run(request, budget=budget)
+
+    assert len(result.resources) == 8
+    assert budget.external_requests_used == 5
+    assert sum(item.license_name == "MIT" for item in result.resources) == 5
+    assert any(event.code == "inspiration_mode_core_subset" for event in result.events)
