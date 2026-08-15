@@ -4,6 +4,7 @@ The v1 package is intentionally isolated from the v0.8 runtime until its user-fl
 low-rate network tests pass.
 """
 
+from .cache import SQLiteCheckpointStore
 from .contracts import (
     Breadth,
     DiscoveryCandidate,
@@ -19,12 +20,14 @@ from .contracts import (
     VerificationScope,
 )
 from .pipeline import PlatformCircuitBreak, V1DiscoveryPipeline
+from .ranking import DeterministicCandidateRanker
 from .search_page import SearchPageCandidateParser
 from .search_session import BilibiliSearchPageDiscoverer, ManagedEdgeSearchSession
 
 __all__ = [
     "BilibiliSearchPageDiscoverer",
     "Breadth",
+    "DeterministicCandidateRanker",
     "DiscoveryCandidate",
     "DiscoveryMode",
     "EvidenceRecord",
@@ -37,6 +40,7 @@ __all__ = [
     "RetentionPolicy",
     "RunEvent",
     "RunOutcome",
+    "SQLiteCheckpointStore",
     "SearchPageCandidateParser",
     "V1DiscoveryPipeline",
     "VerificationScope",

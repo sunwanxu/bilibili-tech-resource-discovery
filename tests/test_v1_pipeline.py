@@ -51,7 +51,7 @@ class Store:
     def load_candidates(self, _intent):
         return list(self.cached)
 
-    def save_candidates(self, candidates):
+    def save_candidates(self, _intent, candidates):
         self.cached = list(candidates)
         self.candidate_checkpoints += 1
 
@@ -152,4 +152,3 @@ def test_candidate_target_stops_followup_query_and_checkpoints_each_deep_read():
     assert reader.calls == 2
     assert store.evidence_checkpoints == 2
     assert any(event.code == "candidate_target_reached" for event in result.events)
-

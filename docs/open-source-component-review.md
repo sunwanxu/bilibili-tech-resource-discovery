@@ -40,6 +40,15 @@
 - 许可证：MIT 或 Apache-2.0。
 - 采用：发布时固定版本，安装锁定 wheel 与托管 Python，运行环境按版本目录原子切换。
 
+### SQLite、RapidFuzz 与 Rank-BM25
+
+- 缓存采用 Python 自带 SQLite：无需额外服务和安装包，支持事务、WAL、增量 checkpoint 和原子提交。
+- `rapidfuzz/RapidFuzz`（MIT）成熟且速度快，但 Windows wheel 依赖 Visual C++ 运行库，且 2026 年曾出现
+  Python 3.13 wheel 缺失回归；暂不设为首次安装的硬依赖。
+- `dorianbrown/rank_bm25`（Apache-2.0）实现清晰，但会引入 NumPy，且中文分词仍需本项目自行解决。
+- v1 第一版采用无第三方依赖的可解释词项得分与 MMR 风格软多样性排序。RapidFuzz 可作为已安装时的
+  可选加速器；真实对照测试证明有收益后再提升为默认组件。
+
 ### `JefferyHcool/BiliNote`
 
 - 地址：https://github.com/JefferyHcool/BiliNote
@@ -119,4 +128,3 @@
 - 任何从 Apache-2.0 项目改写的具体代码都需要保留要求的版权和 NOTICE；仅借鉴接口思想时仍应在
   设计记录中注明来源。
 - “能访问”不代表“允许重新分发”。外部项目的许可证结论必须限定到对应仓库或文件。
-

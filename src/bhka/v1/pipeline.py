@@ -113,7 +113,7 @@ class V1DiscoveryPipeline:
                 self.store.record_event("discovery", "circuit_open", exc.code)
                 continue
             candidates = merge_candidates(candidates, found)
-            self.store.save_candidates(candidates)
+            self.store.save_candidates(intent, candidates)
             events.append(
                 RunEvent(
                     phase="discovery",
@@ -202,4 +202,3 @@ class V1DiscoveryPipeline:
                 else []
             ),
         )
-
