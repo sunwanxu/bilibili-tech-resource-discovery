@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bilibili-hidden-knowledge-agent"
-version = "0.3.0"
+version = "0.7.0"
 description = "Phase-1 Bilibili technical-video value analyzer"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -14,11 +14,11 @@ dependencies = [
   "pydantic>=2.10,<3",
   "python-dotenv>=1.0,<2",
   "tenacity>=9.0,<10",
-  "yt-dlp>=2026.7.31",
+  "yt-dlp>=2026.7.4",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.3,<10", "ruff>=0.12,<1"]
+dev = ["pytest>=8.3,<10", "pyyaml>=6.0,<7", "ruff>=0.12,<1"]
 
 [project.scripts]
 bhka = "bhka.cli:main"

@@ -5,24 +5,25 @@ The `discover` command turns a technical need into a bounded Bilibili research r
 ```powershell
 .\.venv\Scripts\bhka discover `
   "零基础使用嘉立创EDA画STM32最小系统板，寻找教程和开源工程" `
-  --max-candidates 50 `
+  --max-candidates 80 `
   --deep 8
 ```
 
 The command performs these steps:
 
 1. Expands the need into several explainable Chinese search queries.
-2. Uses yt-dlp's maintained Bilibili search extractor.
-3. Deduplicates search results and rewards candidates found by multiple queries.
-4. Deeply inspects a bounded number of candidates.
-5. Reads metadata, descriptions, available subtitles, and one top-comment page.
-6. Extracts repositories, hardware projects, cloud drives, documents, and QQ groups.
-7. Keeps a strict distinction between a verified license, an unverified public repository,
+2. Collects direct project links and public Bilibili candidates from available web indexes.
+3. Keeps internal Bilibili search disabled unless an explicit bounded diagnostic enables it.
+4. Deduplicates search results and rewards candidates found by multiple queries.
+5. Deeply inspects a bounded number of candidates.
+6. Reads metadata, descriptions, available subtitles, and one top-comment page.
+7. Extracts repositories, hardware projects, cloud drives, documents, and QQ groups.
+8. Keeps a strict distinction between a verified license, an unverified public repository,
    shared files with unknown terms, and a promise to open-source later.
-8. Inspects supported external projects for schematic, PCB, BOM, Gerber, source code,
+9. Inspects supported external projects for schematic, PCB, BOM, Gerber, source code,
    documentation, license, and hardware-validation evidence.
-9. Follows supported repository links found on a project page or in a README.
-10. Writes JSON evidence and a Markdown report.
+10. Follows supported repository links found on a project page or in a README.
+11. Writes JSON evidence and a Markdown report.
 
 Before expanding queries, configured authentication is checked once through Bilibili's account-status
 endpoint. Browser database locks, Windows DPAPI failures, missing profiles, and HTTP 412 responses
@@ -69,3 +70,5 @@ block third-party decryption. Managed `bhka login` avoids that path.
 - Search and comment reads stay bounded; this is not a bulk crawler.
 
 Use `--no-comments` for a faster metadata-only run, or lower `--deep` for a smoke test.
+Internal search is off by default. Repeated requirements and BVID evidence use a seven-day local
+cache. Use `--summary-json` for UTF-8 machine-readable output.

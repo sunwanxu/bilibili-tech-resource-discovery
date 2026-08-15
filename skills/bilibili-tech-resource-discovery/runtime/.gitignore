@@ -1,4 +1,6 @@
 .venv/
+.venv-*/
+.venv-path
 .env
 .auth/
 data/

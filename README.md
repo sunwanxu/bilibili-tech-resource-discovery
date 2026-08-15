@@ -2,12 +2,12 @@
 
 # Bilibili Technical Resource Discovery
 
-### 从自然语言需求出发，找到真正可复用的开源技术资产
+### 一句话，自动找到值得学的视频或真正可复用的开源技术资产
 
-不止搜索视频。联合网页索引、B 站内容证据与开源项目平台，发现、验证并排序源码、PCB 工程、设计资料和技术路线。
+系统会先理解你最终想要的是“学习”还是“搭建”：学习时快速给出视频课程与观看顺序；搭建时联合网页索引、B 站内容证据与开源项目平台，验证并排序源码、PCB 工程、设计资料和技术路线。
 
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Version](https://img.shields.io/badge/version-0.3.0-6f42c1)](https://github.com/sunwanxu/bilibili-tech-resource-discovery)
+[![Version](https://img.shields.io/badge/version-0.7.0-6f42c1)](https://github.com/sunwanxu/bilibili-tech-resource-discovery)
 [![License: MIT](https://img.shields.io/badge/License-MIT-2ea44f.svg)](LICENSE)
 [![Agent Skill](https://img.shields.io/badge/Agent%20Skill-Codex%20%7C%20OpenCode-111827)](skills/bilibili-tech-resource-discovery)
 
@@ -35,13 +35,16 @@
 | 能力 | 说明 |
 |---|---|
 | 自然语言需求理解 | 从目标、技术栈、型号、平台、能力水平和资源偏好生成搜索计划 |
+| 自动双模式 | 想学习时走快速课程路径；要代码、工程文件或仓库时走深度资源路径 |
 | 多源候选发现 | 联合普通网页索引、B 站搜索、GitHub、Gitee、立创开源平台及公开项目站点 |
+| 可选 Firecrawl 增强 | 扩大公开网页覆盖并提取动态页面；未配置时自动使用原有发现流程 |
 | B 站证据读取 | 获取可用的视频元数据、简介、字幕和有上限的评论样本 |
 | 隐藏链接挖掘 | 从简介、评论和字幕中提取仓库、硬件项目、文档、网盘和受限资源线索 |
 | 工程完整性验证 | 独立检查源码、原理图、PCB、BOM、Gerber、固件、文档和实物验证信号 |
 | 许可证作用域判断 | 区分已验证许可证、公开但未授权、平台声明、共享文件和仅声称开源 |
 | 资源优先排序 | 先按可访问性、工程价值和许可证证据排序资源，再关联支持视频 |
 | 风控与失败语义 | 提供 HTTP 412 全局熔断、自适应冷却、非零失败退出码和结构化运行状态 |
+| 分段缓存 | 按需求、搜索词和 BV 复用候选、元数据、字幕与评论证据，默认保留 7 天 |
 | 隐私保护 | 登录状态、Cookie、API Key、原始数据和报告仅保存在本地忽略目录 |
 
 支持 `BV...`、`av...`、纯数字 aid 和完整 B 站视频链接。纯数字 aid 会自动规范为可直接交给 `analyze` 的 `av...` 格式。
@@ -84,7 +87,23 @@ flowchart LR
 
 ## 快速开始：作为 Agent Skill 使用
 
-可分发 Skill 是一个自包含文件夹：
+### 最简单的方式
+
+把下面这句话直接发给 Codex 或 OpenCode：
+
+```text
+请从 https://github.com/sunwanxu/bilibili-tech-resource-discovery 安装
+bilibili-tech-resource-discovery Skill。请自行完成环境检查和安装；如果弹出独立的
+Edge 窗口，只让我正常登录 B 站。安装完成后告诉我可以直接用自然语言搜索。
+不要让我复制 Cookie、API Key，也不要让我手工排查 Python 环境。
+```
+
+用户不需要理解仓库结构、虚拟环境或命令行参数。Agent 应当识别自己是 Codex 还是
+OpenCode，执行统一安装入口，并在遇到可自动恢复的问题时自行处理。
+
+### 文件夹安装
+
+可分发 Skill 也是一个自包含文件夹：
 
 ```text
 skills/bilibili-tech-resource-discovery
@@ -93,7 +112,8 @@ skills/bilibili-tech-resource-discovery
 把整个文件夹交给 Codex 或 OpenCode，然后只需要说：
 
 ```text
-请安装这个 Skill。安装完成后，如果需要登录 B 站，请引导我完成登录。
+请安装这个 Skill。请自行识别当前客户端并完成环境检查；如果需要登录 B 站，
+只引导我在弹出的独立 Edge 窗口中正常登录。完成后告诉我可以直接说搜索需求。
 ```
 
 Skill 自带运行源码和跨客户端安装器，不依赖仓库其他目录。首次需要登录时会打开独立 Edge 窗口，用户只需使用正常方式登录 B 站：
@@ -106,11 +126,20 @@ Skill 自带运行源码和跨客户端安装器，不依赖仓库其他目录�
 安装器会验证实际执行的是 Skill 自带版本：
 
 ```text
-Runtime verified: bhka 0.3.0
+Runtime verified: bhka 0.7.0
 ```
 
 > [!TIP]
 > 安装后无需学习命令行。直接描述想做什么、当前水平和希望获得的资源即可。
+
+如果用户或 Agent 需要从仓库根目录执行统一安装，入口只有一个：
+
+```powershell
+python install.py
+```
+
+安装器会自动识别 Codex/OpenCode；只有开发测试才需要额外参数。Firecrawl、AI API Key
+和外部 Cookie 文件都不是首次使用的前置条件。
 
 ## 自然语言使用示例
 
@@ -196,6 +225,28 @@ Copy-Item .env.example .env
 
 AI 分析器是可选能力。没有 OpenAI 或 DeepSeek API Key 时，搜索、资源提取、字幕和评论读取仍可工作；单视频评价会使用明确标记的启发式基线。
 
+### 可选：扩大公开网页搜索范围
+
+配置 Firecrawl 后，`discover` 会先用五条浅层、有界查询发现公开的 B 站视频页面、
+GitHub、Gitee 和立创开源项目。默认每条最多取 8 个结果，候选视频和项目链接分别最多
+保留 50 个。B 站内部搜索默认关闭，只能通过显式 `--bilibili-search on` 进行有界诊断。
+它能在 B 站冷却期间继续工作，也能明显减少对 B 站搜索端点的依赖。
+
+```dotenv
+FIRECRAWL_API_KEY=fc-your-key
+```
+
+Firecrawl 是可选增强：没有 Key、服务不可用或认证失败时，现有 B 站和宿主 AI 搜索流程
+仍会继续。Key 只保存在本地 `.env`，不会写入报告、日志或浏览器插件。使用云端服务时，
+请同时遵守 Firecrawl 和目标网站的服务条款。
+
+`discover` 默认最多保留 80 个候选，但只深查价值最高的 8 个。公开网页候选直接进入
+有界深查，不再先调用 B 站预览接口；相同需求、搜索词和 BV 的证据默认缓存 7 天。
+`--summary-json` 会输出 UTF-8 机器可读结果，避免 PowerShell 读取 Markdown 时出现乱码。
+
+Skill 的私有运行环境使用普通 wheel 安装，不使用 editable `.pth` 指针。开发者在源码
+仓库内仍可自行使用 editable 模式，但它不会出现在普通用户的安装路径中。
+
 ## 项目结构
 
 ```text
@@ -222,7 +273,7 @@ AI 分析器是可选能力。没有 OpenAI 或 DeepSeek API Key 时，搜索、
 - 登录状态只保存在本机安装目录，不复制进 Skill 分发包。
 - 不批量抓取、不绕过验证码、不轮换账户或代理规避平台限制。
 - HTTP 412 会停止本轮全部 B 站直连请求，包括搜索、预览、字幕和评论。
-- 客户端采用 5 / 15 / 30 分钟自适应冷却；它不是 B 站官方倒计时。
+- 只有明确收到 HTTP 412 才触发客户端冷却，采用 2 / 5 / 10 分钟轻量阶梯；普通重复搜索不会自行进入冷却，它也不是 B 站官方倒计时。
 - 冷却期间仍可继续普通网页索引和公开项目平台搜索。
 - 评论读取有明确数量上限，缺失字幕或评论不会被伪造成完整证据。
 - 受限资源会保留为人工复核线索，不会被错误标记为公开可用。

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlencode
@@ -155,6 +157,38 @@ class YtDlpDataSource:
     def __init__(self, settings: Settings):
         self.settings = settings
 
+    def _cache_path(self, category: str, key: str) -> Path:
+        safe_key = re.sub(r"[^0-9A-Za-z._-]+", "-", key).strip("-")
+        return self.settings.project_root / "data" / "cache" / category / f"{safe_key}.json"
+
+    def _load_cache(self, path: Path) -> Any | None:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            cached_at = datetime.fromisoformat(payload["cached_at"])
+            if cached_at.tzinfo is None:
+                cached_at = cached_at.replace(tzinfo=UTC)
+            ttl = timedelta(hours=max(1, getattr(self.settings, "cache_ttl_hours", 168)))
+            if datetime.now(UTC) - cached_at.astimezone(UTC) > ttl:
+                return None
+            return payload.get("value")
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            return None
+
+    @staticmethod
+    def _write_cache(path: Path, value: Any) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        payload = json.dumps(
+            {"cached_at": datetime.now(UTC).isoformat(), "value": value},
+            ensure_ascii=False,
+            indent=2,
+        )
+        try:
+            temporary.write_text(payload, encoding="utf-8")
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
     def verify_auth(self) -> AuthenticationStatus:
         """Check Bilibili's account-status endpoint without exposing account identity."""
         configured = bool(self.settings.cookies_file or self.settings.cookies_from_browser)
@@ -208,6 +242,13 @@ class YtDlpDataSource:
         if part is not None and part < 1:
             raise ValueError("Part number must be at least 1")
         video_id = normalize_video_id(video)
+        cache_key = f"{video_id}-p{part or 0}-comments{int(include_comments)}"
+        cached = self._load_cache(self._cache_path("videos", cache_key))
+        if cached is not None:
+            try:
+                return RawVideoData.model_validate(cached)
+            except (TypeError, ValueError):
+                pass
         bvid = video_id if video_id.startswith("BV") else ""
         url = f"https://www.bilibili.com/video/{video_id}"
         if part is not None:
@@ -247,9 +288,9 @@ class YtDlpDataSource:
                     if include_comments
                     else []
                 )
-        except (CookieLoadError, DownloadError) as exc:
+        except (CookieLoadError, DownloadError, RequestError, OSError, ValueError) as exc:
             raise self._friendly_error(f"yt-dlp could not fetch {bvid}", exc) from exc
-        return RawVideoData(
+        raw = RawVideoData(
             fetched_at=datetime.now(UTC),
             source="yt-dlp",
             metadata=self._metadata(bvid, resolved_url, info, part),
@@ -257,6 +298,16 @@ class YtDlpDataSource:
             comments=comments,
             warnings=logger.warnings,
         )
+        cached_value = raw.model_dump(mode="json")
+        cached_value["metadata"].pop("author", None)
+        for comment in cached_value["comments"]:
+            comment.pop("author", None)
+        self._write_cache(self._cache_path("videos", cache_key), cached_value)
+        self._write_cache(
+            self._cache_path("previews", raw.metadata.bvid),
+            raw.metadata.model_dump(mode="json", exclude={"author"}),
+        )
+        return raw
 
     def search(self, query: str, limit: int = 20) -> list[SearchResult]:
         """Use yt-dlp's maintained Bilibili search extractor without resolving videos."""
@@ -264,6 +315,15 @@ class YtDlpDataSource:
             raise ValueError("Search query cannot be empty")
         if not 1 <= limit <= 50:
             raise ValueError("Search limit must be between 1 and 50")
+        search_key = hashlib.sha256(
+            f"{limit}\n{query.strip()}".encode()
+        ).hexdigest()[:24]
+        cached = self._load_cache(self._cache_path("search", search_key))
+        if cached is not None:
+            try:
+                return [SearchResult.model_validate(item) for item in cached]
+            except (TypeError, ValueError):
+                pass
         logger = _CaptureLogger()
         options: dict[str, Any] = {
             "quiet": True,
@@ -279,7 +339,7 @@ class YtDlpDataSource:
         try:
             with YoutubeDL(options) as ydl:
                 info = ydl.extract_info(f"bilisearch{limit}:{query.strip()}", download=False)
-        except (CookieLoadError, DownloadError) as exc:
+        except (CookieLoadError, DownloadError, RequestError, OSError, ValueError) as exc:
             raise self._friendly_error(f"Bilibili search failed for {query!r}", exc) from exc
         entries = (info or {}).get("entries") or []
         results = []
@@ -300,11 +360,21 @@ class YtDlpDataSource:
                     query=query.strip(),
                     rank=rank,
                 ))
+        self._write_cache(
+            self._cache_path("search", search_key),
+            [item.model_dump(mode="json") for item in results],
+        )
         return results
 
     def preview(self, video: str) -> VideoMetadata:
         """Read lightweight public metadata for shortlist ranking without format extraction."""
         video_id = normalize_video_id(video)
+        cached = self._load_cache(self._cache_path("previews", video_id))
+        if cached is not None:
+            try:
+                return VideoMetadata.model_validate(cached)
+            except (TypeError, ValueError):
+                pass
         query = urlencode(
             {"bvid": video_id} if video_id.startswith("BV") else {"aid": video_id[2:]}
         )
@@ -330,7 +400,7 @@ class YtDlpDataSource:
         published = datetime.fromtimestamp(timestamp, UTC) if timestamp else None
         stats = data.get("stat") or {}
         bvid = data["bvid"]
-        return VideoMetadata(
+        preview = VideoMetadata(
             bvid=bvid,
             title=data.get("title") or bvid,
             description=data.get("desc") or "",
@@ -344,6 +414,11 @@ class YtDlpDataSource:
             duration_seconds=data.get("duration"),
             webpage_url=f"https://www.bilibili.com/video/{bvid}",
         )
+        self._write_cache(
+            self._cache_path("previews", video_id),
+            preview.model_dump(mode="json", exclude={"author"}),
+        )
+        return preview
 
     def list_parts(self, video: str) -> list[VideoPart]:
         """Read the complete part directory with one bounded API request."""

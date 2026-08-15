@@ -56,6 +56,15 @@ CONVERSATIONAL_TERMS = {
 }
 
 
+def _safe_urlparse(value: str):
+    try:
+        parsed = urlparse(value)
+        _ = parsed.hostname
+        return parsed
+    except ValueError:
+        return None
+
+
 def _normalized_terms(value: str) -> list[str]:
     return [
         item
@@ -108,6 +117,34 @@ def extract_hard_anchors(requirement: str) -> list[str]:
     ))
     anchors.extend(re.findall(r"\b[A-Z]{2,8}\b", requirement))
     return list(dict.fromkeys(anchors))
+
+
+LEARNING_INTENT_TERMS = (
+    "学习", "教程", "课程", "视频", "怎么学", "如何学", "入门", "从零", "零基础",
+    "不会", "教我", "观看顺序", "学习路线", "适合新手",
+)
+RESOURCE_GOAL_TERMS = (
+    "开源", "源码", "源代码", "代码", "仓库", "github", "gitee", "gitcode",
+    "pcb", "原理图", "gerber", "bom", "固件", "工程文件", "项目资料", "数据集",
+    "模型文件", "工作流文件", "许可证", "license", "复现", "搭建", "制作参考",
+)
+STRONG_RESOURCE_GOAL_TERMS = (
+    "开源", "源码", "源代码", "代码", "仓库", "github", "gitee", "gitcode",
+    "gerber", "bom", "固件", "工程文件", "项目资料", "数据集", "模型文件",
+    "工作流文件", "许可证", "license",
+)
+
+
+def infer_discovery_mode(requirement: str) -> str:
+    """Choose the light learning path unless reusable artifacts are the explicit goal."""
+    normalized = " ".join(requirement.lower().split())
+    if any(term in normalized for term in STRONG_RESOURCE_GOAL_TERMS):
+        return "resources"
+    if any(term in normalized for term in LEARNING_INTENT_TERMS):
+        return "learning"
+    if any(term in normalized for term in RESOURCE_GOAL_TERMS):
+        return "resources"
+    return "resources"
 
 
 def expand_queries(requirement: str, limit: int = 8) -> list[str]:
@@ -180,7 +217,11 @@ def seed_video_results(urls: list[str], requirement: str) -> list[SearchResult]:
     return results
 
 
-def prepare_direct_resources(urls: list[str]) -> list[ExternalResource]:
+def prepare_direct_resources(
+    urls: list[str],
+    *,
+    verify: bool = True,
+) -> list[ExternalResource]:
     """Normalize and inspect public project links found independently of Bilibili."""
     resources: list[ExternalResource] = []
     seen: set[str] = set()
@@ -188,8 +229,8 @@ def prepare_direct_resources(urls: list[str]) -> list[ExternalResource]:
         locator = value.strip().rstrip(".,;:!?")
         if not locator or locator in seen:
             continue
-        parsed = urlparse(locator)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        parsed = _safe_urlparse(locator)
+        if parsed is None or parsed.scheme not in {"http", "https"} or not parsed.netloc:
             continue
         seen.add(locator)
         kind, access = classify_resource(locator)
@@ -201,7 +242,8 @@ def prepare_direct_resources(urls: list[str]) -> list[ExternalResource]:
             license_status="unverified",
             origins=["public_web_direct"],
         ))
-    inspect_external_resources(resources)
+    if verify:
+        inspect_external_resources(resources)
     return resources
 
 
@@ -254,7 +296,10 @@ def extract_resources(raw: RawVideoData) -> list[ExternalResource]:
 
 
 def classify_resource(locator: str) -> tuple[str, str]:
-    host = urlparse(locator).netloc.lower()
+    parsed = _safe_urlparse(locator)
+    if parsed is None:
+        return "external_link", "invalid_url"
+    host = parsed.netloc.lower()
     if host in {
         "github.com",
         "www.github.com",
@@ -274,7 +319,7 @@ def classify_resource(locator: str) -> tuple[str, str]:
         return "bilibili_reference", "public_page"
     if "weixin.qq.com" in host or "mp.weixin.qq.com" in host:
         return "wechat_resource", "wechat_may_be_required"
-    if urlparse(locator).path.lower().endswith(".pdf"):
+    if parsed.path.lower().endswith(".pdf"):
         return "document", "public_page"
     return "external_link", "unverified"
 
@@ -414,7 +459,9 @@ def _inspect_gitee(resource: ExternalResource, timeout: int) -> list[str]:
 
 
 def _canonical_resource_key(locator: str) -> str:
-    parsed = urlparse(locator.strip())
+    parsed = _safe_urlparse(locator.strip())
+    if parsed is None:
+        return locator.strip().lower()
     host = parsed.netloc.lower().removeprefix("www.")
     path = parsed.path.rstrip("/").lower()
     return f"{host}{path}"
@@ -536,7 +583,11 @@ def inspect_external_resources(
         index += 1
         if resource.inspection_status == "inspected":
             continue
-        parsed = urlparse(resource.locator)
+        parsed = _safe_urlparse(resource.locator)
+        if parsed is None:
+            resource.inspection_status = "invalid_url"
+            resource.verification_notes.append("Malformed URL was skipped safely.")
+            continue
         host = parsed.netloc.lower()
         parts = [part for part in parsed.path.split("/") if part]
         nested_links: list[str] = []
@@ -756,12 +807,14 @@ class DiscoveryPipeline:
     def run(
         self,
         requirement: str,
-        max_candidates: int = 50,
+        max_candidates: int = 80,
         deep_limit: int = 8,
         include_comments: bool = True,
         planned_queries: list[str] | None = None,
         seed_video_urls: list[str] | None = None,
         seed_resource_urls: list[str] | None = None,
+        bilibili_search: str = "off",
+        discovery_mode: str = "resources",
         progress: Callable[[str], None] | None = None,
     ) -> DiscoveryReport:
         started_at = datetime.now(UTC)
@@ -771,6 +824,10 @@ class DiscoveryPipeline:
             raise ValueError("max_candidates must be between 10 and 200")
         if not 1 <= deep_limit <= 12:
             raise ValueError("deep_limit must be between 1 and 12")
+        if bilibili_search not in {"auto", "on", "off"}:
+            raise ValueError("bilibili_search must be auto, on, or off")
+        if discovery_mode not in {"learning", "resources"}:
+            raise ValueError("discovery_mode must be learning or resources")
         if planned_queries:
             queries = list(dict.fromkeys(
                 " ".join(query.split())
@@ -783,7 +840,11 @@ class DiscoveryPipeline:
             queries = expand_queries(requirement)
         per_query = min(20, max(5, math.ceil(max_candidates / len(queries)) + 2))
         hits = seed_video_results(seed_video_urls or [], requirement)
-        direct_resources = prepare_direct_resources(seed_resource_urls or [])
+        verify_resources = discovery_mode == "resources"
+        direct_resources = prepare_direct_resources(
+            seed_resource_urls or [],
+            verify=verify_resources,
+        )
         limitations: list[str] = []
         events: list[DiscoveryEvent] = []
         successful_queries = 0
@@ -792,15 +853,27 @@ class DiscoveryPipeline:
         stopped_at_query: str | None = None
         stop_reason: str | None = None
         failure_category: str | None = None
-        target = min(max_candidates, max(5, deep_limit))
-        skip_internal_search = len({hit.source_id for hit in hits}) >= target
+        search_target = min(max_candidates, max(5, deep_limit))
+        public_web_target = max(1, min(5, deep_limit))
+        public_video_count = len({hit.source_id for hit in hits})
+        skip_internal_search = (
+            bilibili_search == "off"
+            or (
+                bilibili_search == "auto"
+                and public_video_count >= public_web_target
+            )
+        )
         if skip_internal_search:
             skipped_queries = len(queries)
-            stop_reason = "web_candidate_target_reached"
+            stop_reason = (
+                "bilibili_search_disabled"
+                if bilibili_search == "off"
+                else "web_candidate_target_reached"
+            )
             events.append(DiscoveryEvent(
                 phase="candidate_discovery",
-                status="web_candidate_target_reached",
-                detail=f"{len(hits)} public-web video candidates",
+                status=stop_reason,
+                detail=f"{public_video_count} public-web video candidates",
             ))
         if (
             not skip_internal_search
@@ -824,6 +897,7 @@ class DiscoveryPipeline:
                     run_status=(
                         "partial_success" if seeded_candidates or direct_resources else "failed"
                     ),
+                    discovery_mode=discovery_mode,
                     requirement=requirement,
                     expanded_queries=queries,
                     candidates_found=len(seeded_candidates),
@@ -864,7 +938,7 @@ class DiscoveryPipeline:
                     detail=f"{len(query_hits)} results",
                 ))
                 unique_hits = len({hit.source_id for hit in hits})
-                if unique_hits >= target and index < len(queries):
+                if unique_hits >= search_target and index < len(queries):
                     skipped_queries = len(queries) - index
                     stopped_at_query = query
                     stop_reason = "candidate_target_reached"
@@ -872,7 +946,7 @@ class DiscoveryPipeline:
                         phase="search",
                         status="stopped_early",
                         query=query,
-                        detail=f"candidate target reached: {unique_hits}/{target}",
+                        detail=f"candidate target reached: {unique_hits}/{search_target}",
                     ))
                     break
             except DataSourceError as exc:
@@ -939,6 +1013,7 @@ class DiscoveryPipeline:
                 started_at=started_at,
                 completed_at=datetime.now(UTC),
                 run_status=run_status,
+                discovery_mode=discovery_mode,
                 requirement=requirement,
                 expanded_queries=queries,
                 candidates_found=len(candidates),
@@ -955,43 +1030,41 @@ class DiscoveryPipeline:
                 events=events,
                 evidence_limitations=limitations,
             )
-        scan_count = min(len(candidates), max(8, deep_limit * 3))
+        # Lightweight previews are the bridge between a broad candidate list and
+        # resource-first ranking. Keep this wider than deep inspection so a
+        # repository-bearing video is not hidden behind the first few results.
+        scan_count = min(len(candidates), max(8, min(16, deep_limit * 2)))
         if progress and scan_count:
             progress(f"Ranking {scan_count} candidates with lightweight metadata...")
         ranked_candidates = []
-        rejected_candidates = []
+        strict_filter = len(candidates) > 30
         for candidate in candidates[:scan_count]:
             is_seeded = "web_index" in candidate.provenance
+            if is_seeded:
+                # The public index already supplied a concrete video URL. Avoid
+                # spending an extra Bilibili API request merely to decide whether
+                # it is allowed into the bounded deep-inspection pool.
+                ranked_candidates.append((candidate.discovery_score, candidate))
+                events.append(DiscoveryEvent(
+                    phase="candidate_filter",
+                    status="retained_explicit_candidate",
+                    detail=candidate.source_id,
+                ))
+                continue
             try:
                 self._pace_bilibili_request()
                 preview = self.source.preview(candidate.webpage_url)
-                if not passes_hard_relevance(
+                if strict_filter and not passes_hard_relevance(
                     preview.title,
                     preview.description,
                     requirement,
                 ):
-                    if is_seeded:
-                        events.append(DiscoveryEvent(
-                            phase="candidate_filter",
-                            status="retained_explicit_candidate",
-                            detail=candidate.source_id,
-                        ))
-                    else:
-                        events.append(DiscoveryEvent(
-                            phase="candidate_filter",
-                            status="rejected",
-                            detail=candidate.source_id,
-                        ))
-                        relevance = preview_relevance(
-                            preview.title,
-                            preview.description,
-                            requirement,
-                        )
-                        rejected_candidates.append((
-                            relevance + min(2.0, candidate.discovery_score / 10),
-                            candidate,
-                        ))
-                        continue
+                    events.append(DiscoveryEvent(
+                        phase="candidate_filter",
+                        status="rejected",
+                        detail=candidate.source_id,
+                    ))
+                    continue
                 relevance = preview_relevance(
                     preview.title,
                     preview.description,
@@ -1016,6 +1089,7 @@ class DiscoveryPipeline:
                         started_at=started_at,
                         completed_at=datetime.now(UTC),
                         run_status="partial_success" if successful_queries else "failed",
+                        discovery_mode=discovery_mode,
                         requirement=requirement,
                         expanded_queries=queries,
                         candidates_found=len(candidates),
@@ -1032,13 +1106,9 @@ class DiscoveryPipeline:
                         evidence_limitations=limitations,
                     )
                 limitations.append(f"Could not preview {candidate.source_id}: {exc}")
-                if is_seeded:
-                    ranked_candidates.append((candidate.discovery_score, candidate))
                 continue
             except ValueError as exc:
                 limitations.append(f"Could not preview {candidate.source_id}: {exc}")
-                if is_seeded:
-                    ranked_candidates.append((candidate.discovery_score, candidate))
                 continue
             preview_links = _resource_locators(preview.description)
             project_links = sum(
@@ -1049,20 +1119,10 @@ class DiscoveryPipeline:
             combined = relevance + min(2.0, candidate.discovery_score / 10) + resource_signal
             ranked_candidates.append((combined, candidate))
         ranked_candidates.sort(key=lambda item: (-item[0], -item[1].discovery_score))
-        if not ranked_candidates and rejected_candidates:
-            rejected_candidates.sort(
-                key=lambda item: (-item[0], -item[1].discovery_score),
-            )
-            ranked_candidates = rejected_candidates[:deep_limit]
-            for _, candidate in ranked_candidates:
-                events.append(DiscoveryEvent(
-                    phase="candidate_filter",
-                    status="retained_filter_fallback",
-                    detail=candidate.source_id,
-                ))
+        if strict_filter and not ranked_candidates:
             limitations.append(
-                "All previewed candidates missed the strict relevance gate; the highest-ranked "
-                "bounded candidates were retained for description, subtitle, and comment evidence."
+                "All previewed internal-search candidates missed the strict relevance gate; "
+                "none were deep-inspected. Public-web candidates and direct resources were retained."
             )
         shortlist = [item[1] for item in ranked_candidates]
         videos = []
@@ -1090,7 +1150,8 @@ class DiscoveryPipeline:
                 limitations.append(f"Could not inspect {candidate.source_id}: {exc}")
                 continue
             resources = extract_resources(raw)
-            inspect_external_resources(resources)
+            if verify_resources:
+                inspect_external_resources(resources)
             open_status, open_reason = classify_open_source(raw, resources)
             fit_score, fit_reason = suitability(raw, requirement, resources)
             evidence_basis = ["metadata", "description"]
@@ -1124,19 +1185,23 @@ class DiscoveryPipeline:
                 status="success",
                 detail=candidate.source_id,
             ))
-        videos.sort(key=lambda item: (
-            -sum(
-                resource.kind in {"code_repository", "hardware_project"}
-                for resource in item.resources
-            ),
-            -item.suitability_score,
-            -item.discovery_score,
-        ))
+        if discovery_mode == "learning":
+            videos.sort(key=lambda item: (-item.suitability_score, -item.discovery_score))
+        else:
+            videos.sort(key=lambda item: (
+                -sum(
+                    resource.kind in {"code_repository", "hardware_project"}
+                    for resource in item.resources
+                ),
+                -item.suitability_score,
+                -item.discovery_score,
+            ))
         resource_pool = merge_resource_pool(
             direct_resources,
             *(video.resources for video in videos),
         )
-        inspect_external_resources(resource_pool)
+        if verify_resources:
+            inspect_external_resources(resource_pool)
         ranked_resources = rank_resources(resource_pool)
         if stop_reason == "http_412":
             run_status = "partial_success" if successful_queries or videos else "failed"
@@ -1144,6 +1209,7 @@ class DiscoveryPipeline:
             started_at=started_at,
             completed_at=datetime.now(UTC),
             run_status=run_status,
+            discovery_mode=discovery_mode,
             requirement=requirement,
             expanded_queries=queries,
             candidates_found=len(candidates),

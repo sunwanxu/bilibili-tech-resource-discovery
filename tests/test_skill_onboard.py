@@ -4,6 +4,8 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 
+import yaml
+
 SCRIPT = (
     Path(__file__).parents[1]
     / "skills"
@@ -188,6 +190,7 @@ def test_portable_update_preserves_managed_login_state(tmp_path: Path, monkeypat
             f"BILIBILI_COOKIES_FILE={cookie}\n"
             "BILIBILI_RETRIES=2\n"
             "BILIBILI_RATE_LIMIT_SECONDS=1.0\n"
+            "FIRECRAWL_SEARCH_LIMIT=5\n"
         ),
         encoding="utf-8",
     )
@@ -199,6 +202,7 @@ def test_portable_update_preserves_managed_login_state(tmp_path: Path, monkeypat
     assert str(cookie.resolve()) in env
     assert "BILIBILI_RETRIES=1" in env
     assert "BILIBILI_RATE_LIMIT_SECONDS=2.5" in env
+    assert "FIRECRAWL_SEARCH_LIMIT=8" in env
     assert venv_marker.read_text(encoding="utf-8") == "preserve runtime"
 
 
@@ -287,6 +291,16 @@ def test_bundled_runtime_matches_primary_source_tree() -> None:
     }
 
 
+def test_skill_ui_metadata_is_valid_utf8_and_user_facing() -> None:
+    skill = Path(__file__).parents[1] / "skills" / portable.SKILL_NAME
+    metadata = yaml.safe_load((skill / "agents" / "openai.yaml").read_text(encoding="utf-8"))
+    interface = metadata["interface"]
+
+    assert interface["display_name"] == "B站技术资源发现"
+    assert 25 <= len(interface["short_description"]) <= 64
+    assert f"${portable.SKILL_NAME}" in interface["default_prompt"]
+
+
 def test_portable_installer_verifies_the_exact_bundled_runtime_version(
     tmp_path: Path,
     monkeypatch,
@@ -296,7 +310,7 @@ def test_portable_installer_verifies_the_exact_bundled_runtime_version(
     runtime = target / "runtime"
     runtime.mkdir(parents=True)
     (runtime / "pyproject.toml").write_text(
-        '[project]\nname = "bilibili-hidden-knowledge-agent"\nversion = "0.3.0"\n',
+        '[project]\nname = "bilibili-hidden-knowledge-agent"\nversion = "0.4.0"\n',
         encoding="utf-8",
     )
     python = runtime / "python"
@@ -309,12 +323,162 @@ def test_portable_installer_verifies_the_exact_bundled_runtime_version(
     def fake_run(command, **kwargs):
         calls.append(command)
         if command == [str(bhka), "--version"]:
-            return SimpleNamespace(returncode=0, stdout="bhka 0.3.0\n")
+            return SimpleNamespace(returncode=0, stdout="bhka 0.4.0\n")
         return SimpleNamespace(returncode=0, stdout="")
 
     monkeypatch.setattr(portable.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        portable,
+        "_pip_install",
+        lambda python, runtime: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
 
     portable.install_runtime(target, login=False)
 
     assert [str(bhka), "--version"] in calls
-    assert "Runtime verified: bhka 0.3.0" in capsys.readouterr().out
+    assert "Runtime verified: bhka 0.4.0" in capsys.readouterr().out
+
+
+def test_portable_runtime_install_is_non_editable(tmp_path: Path, monkeypatch) -> None:
+    captured: list[str] = []
+
+    class FakeProcess:
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+        def communicate(self):
+            return "", ""
+
+    def fake_popen(command, **_kwargs):
+        captured.extend(command)
+        return FakeProcess()
+
+    monkeypatch.setattr(portable.subprocess, "Popen", fake_popen)
+
+    result = portable._pip_install(tmp_path / "python", tmp_path / "runtime")
+
+    assert result.returncode == 0
+    assert "-e" not in captured
+    assert "--upgrade" in captured
+    assert captured[-1] == str(tmp_path / "runtime")
+
+
+def test_portable_installer_removes_only_stale_package_rollback_artifacts(
+    tmp_path: Path,
+) -> None:
+    site_packages = tmp_path / "Lib" / "site-packages"
+    stale = site_packages / "~ilibili_hidden_knowledge_agent-0.4.0.dist-info"
+    unrelated = site_packages / "~unrelated-package"
+    stale.mkdir(parents=True)
+    unrelated.mkdir()
+
+    portable._remove_stale_package_artifacts(tmp_path)
+
+    assert not stale.exists()
+    assert unrelated.exists()
+
+
+def test_portable_installer_rebuilds_an_unhealthy_runtime(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "installed-skill"
+    runtime = target / "runtime"
+    environment = runtime / ".venv"
+    environment.mkdir(parents=True)
+    (runtime / "pyproject.toml").write_text(
+        '[project]\nname = "bilibili-hidden-knowledge-agent"\nversion = "0.4.0"\n',
+        encoding="utf-8",
+    )
+    python = environment / "python"
+    bhka = environment / "bhka"
+    python.touch()
+    bhka.touch()
+    monkeypatch.setattr(portable, "runtime_paths", lambda value: (python, bhka))
+    rebuilt = []
+
+    class FakeBuilder:
+        def __init__(self, **_kwargs):
+            pass
+
+        def create(self, path):
+            rebuilt.append(Path(path))
+            Path(path).mkdir(parents=True)
+            python.touch()
+            bhka.touch()
+
+    def fake_run(command, **_kwargs):
+        if command == [str(python), "--version"]:
+            return SimpleNamespace(returncode=1, stdout="")
+        if command == [str(bhka), "--version"]:
+            return SimpleNamespace(returncode=0, stdout="bhka 0.4.0\n")
+        return SimpleNamespace(returncode=0, stdout="")
+
+    monkeypatch.setattr(portable.venv, "EnvBuilder", FakeBuilder)
+    monkeypatch.setattr(portable.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        portable,
+        "_pip_install",
+        lambda python, runtime: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    portable.install_runtime(target, login=False)
+
+    assert rebuilt == [environment]
+
+
+def test_portable_update_switches_environment_when_old_launcher_is_locked(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    target = tmp_path / "installed-skill"
+    runtime = target / "runtime"
+    environment = runtime / ".venv"
+    scripts = environment / ("Scripts" if portable.os.name == "nt" else "bin")
+    scripts.mkdir(parents=True)
+    (runtime / "pyproject.toml").write_text(
+        '[project]\nname = "bilibili-hidden-knowledge-agent"\nversion = "0.4.0"\n',
+        encoding="utf-8",
+    )
+    old_python = scripts / ("python.exe" if portable.os.name == "nt" else "python")
+    old_bhka = scripts / ("bhka.exe" if portable.os.name == "nt" else "bhka")
+    old_python.touch()
+    old_bhka.touch()
+    created: list[Path] = []
+
+    class FakeBuilder:
+        def __init__(self, **_kwargs):
+            pass
+
+        def create(self, path):
+            new_environment = Path(path)
+            created.append(new_environment)
+            new_scripts = new_environment / ("Scripts" if portable.os.name == "nt" else "bin")
+            new_scripts.mkdir(parents=True)
+            (new_scripts / ("python.exe" if portable.os.name == "nt" else "python")).touch()
+            (new_scripts / ("bhka.exe" if portable.os.name == "nt" else "bhka")).touch()
+
+    def fake_run(command, **_kwargs):
+        if command == [str(old_python), "--version"]:
+            return SimpleNamespace(returncode=0, stdout="Python 3.12\n", stderr="")
+        if command[-1] == "--version":
+            return SimpleNamespace(returncode=0, stdout="bhka 0.4.0\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    install_attempts = 0
+
+    def fake_pip_install(python, runtime):
+        nonlocal install_attempts
+        install_attempts += 1
+        if install_attempts == 1:
+            return SimpleNamespace(returncode=1, stdout="", stderr="launcher is locked")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(portable.venv, "EnvBuilder", FakeBuilder)
+    monkeypatch.setattr(portable.subprocess, "run", fake_run)
+    monkeypatch.setattr(portable, "_pip_install", fake_pip_install)
+
+    portable.install_runtime(target, login=False)
+
+    assert len(created) == 1
+    assert created[0].name.startswith(".venv-0.4.0-")
+    assert portable.runtime_environment(runtime) == created[0]

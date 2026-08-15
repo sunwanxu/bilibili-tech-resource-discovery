@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import tomllib
 import venv
 from datetime import UTC, datetime
@@ -89,6 +90,7 @@ def _upgrade_safe_runtime_defaults(runtime: Path) -> None:
     replacements = {
         "BILIBILI_RETRIES=2": "BILIBILI_RETRIES=1",
         "BILIBILI_RATE_LIMIT_SECONDS=1.0": "BILIBILI_RATE_LIMIT_SECONDS=2.5",
+        "FIRECRAWL_SEARCH_LIMIT=5": "FIRECRAWL_SEARCH_LIMIT=8",
     }
     lines = env_path.read_text(encoding="utf-8-sig").splitlines()
     updated = [replacements.get(line.strip(), line) for line in lines]
@@ -188,11 +190,22 @@ def _copy_bundle(
     return backup
 
 
+def runtime_environment(runtime: Path) -> Path:
+    environment_name = ".venv"
+    pointer = runtime / ".venv-path"
+    if pointer.is_file():
+        candidate = pointer.read_text(encoding="utf-8").strip()
+        if candidate and Path(candidate).name == candidate:
+            environment_name = candidate
+    return runtime / environment_name
+
+
 def runtime_paths(runtime: Path) -> tuple[Path, Path]:
+    environment = runtime_environment(runtime)
     if os.name == "nt":
-        scripts = runtime / ".venv" / "Scripts"
+        scripts = environment / "Scripts"
         return scripts / "python.exe", scripts / "bhka.exe"
-    scripts = runtime / ".venv" / "bin"
+    scripts = environment / "bin"
     return scripts / "python", scripts / "bhka"
 
 
@@ -200,20 +213,125 @@ def _managed_login_exists(runtime: Path) -> bool:
     return (runtime / ".auth" / "bilibili.cookies.txt").is_file()
 
 
+def _runtime_python_works(python: Path) -> bool:
+    if not python.is_file():
+        return False
+    try:
+        result = subprocess.run(
+            [str(python), "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
+def _pip_install(python: Path, runtime: Path) -> subprocess.CompletedProcess[str]:
+    command = [
+        str(python),
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+        "--quiet",
+        "--upgrade",
+        str(runtime),
+    ]
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    started = time.monotonic()
+    next_update = 15
+    while process.poll() is None:
+        time.sleep(1)
+        elapsed = int(time.monotonic() - started)
+        if elapsed >= next_update:
+            print(f"Still installing dependencies... {elapsed}s", flush=True)
+            next_update += 15
+    stdout, stderr = process.communicate()
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def _remove_stale_package_artifacts(environment: Path) -> None:
+    """Remove pip rollback directories left by interrupted historical upgrades."""
+    roots = [environment / "Lib" / "site-packages"]
+    roots.extend((environment / "lib").glob("python*/site-packages"))
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for candidate in root.iterdir():
+            lowered = candidate.name.lower()
+            if not lowered.startswith("~") or "ilibili_hidden_knowledge_agent" not in lowered:
+                continue
+            if candidate.is_dir():
+                shutil.rmtree(candidate, ignore_errors=True)
+            else:
+                candidate.unlink(missing_ok=True)
+
+
+def _write_environment_pointer(runtime: Path, environment: Path) -> None:
+    pointer = runtime / ".venv-path"
+    if environment.name == ".venv":
+        pointer.unlink(missing_ok=True)
+        return
+    temporary = pointer.with_suffix(".tmp")
+    temporary.write_text(environment.name + "\n", encoding="utf-8")
+    os.replace(temporary, pointer)
+
+
+def _install_error(result: subprocess.CompletedProcess[str]) -> str:
+    details = (result.stderr or result.stdout or "").strip().splitlines()
+    useful = next((line.strip() for line in reversed(details) if line.strip()), "")
+    if useful:
+        return f"The bundled Python runtime could not be installed: {useful}"
+    return "The bundled Python runtime could not be installed."
+
+
 def install_runtime(target: Path, login: bool) -> None:
     runtime = target / "runtime"
-    python, bhka = runtime_paths(runtime)
-    if not python.is_file():
-        venv.EnvBuilder(with_pip=True).create(runtime / ".venv")
-    result = subprocess.run(
-        [str(python), "-m", "pip", "install", "-e", str(runtime)],
-        check=False,
-    )
-    if result.returncode:
-        raise RuntimeError("The bundled Python runtime could not be installed.")
     expected_version = tomllib.loads(
         (runtime / "pyproject.toml").read_text(encoding="utf-8")
     )["project"]["version"]
+    python, bhka = runtime_paths(runtime)
+    had_working_runtime = _runtime_python_works(python)
+    if not _runtime_python_works(python):
+        environment = runtime_environment(runtime)
+        if environment.exists():
+            try:
+                shutil.rmtree(environment)
+            except PermissionError:
+                environment = runtime / f".venv-{expected_version}-{uuid4().hex[:6]}"
+        venv.EnvBuilder(with_pip=True).create(environment)
+        _write_environment_pointer(runtime, environment)
+        python, bhka = runtime_paths(runtime)
+    _remove_stale_package_artifacts(runtime_environment(runtime))
+    print("Installing the private runtime...", flush=True)
+    result = _pip_install(python, runtime)
+    if result.returncode:
+        if not had_working_runtime:
+            raise RuntimeError(_install_error(result))
+        # Windows may keep the old console launcher open while an agent is
+        # using the Skill. Build a fresh private environment and switch future
+        # commands to it instead of asking the user to close the agent.
+        environment = runtime / f".venv-{expected_version}-{uuid4().hex[:6]}"
+        venv.EnvBuilder(with_pip=True).create(environment)
+        replacement_python, _ = (
+            (environment / "Scripts" / "python.exe", environment / "Scripts" / "bhka.exe")
+            if os.name == "nt"
+            else (environment / "bin" / "python", environment / "bin" / "bhka")
+        )
+        replacement_result = _pip_install(replacement_python, runtime)
+        if replacement_result.returncode:
+            shutil.rmtree(environment, ignore_errors=True)
+            raise RuntimeError(_install_error(replacement_result))
+        _write_environment_pointer(runtime, environment)
+        python, bhka = runtime_paths(runtime)
+    _remove_stale_package_artifacts(runtime_environment(runtime))
     verification = subprocess.run(
         [str(bhka), "--version"],
         check=False,
@@ -225,7 +343,7 @@ def install_runtime(target: Path, login: bool) -> None:
         raise RuntimeError(
             "The installed command does not match the bundled runtime version."
         )
-    print(f"Runtime verified: {expected_output} ({bhka})")
+    print(f"Runtime verified: {expected_output} ({bhka})", flush=True)
     if login and not _managed_login_exists(runtime):
         result = subprocess.run(
             [str(bhka), "login", "--project-root", str(runtime)],
@@ -274,6 +392,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help=argparse.SUPPRESS,
     )
+    parser.add_argument("--home", type=Path, help=argparse.SUPPRESS)
     return parser
 
 
@@ -284,12 +403,16 @@ def main(argv: list[str] | None = None) -> int:
             args.agent,
             args.force,
             not args.no_login,
+            home=args.home,
             state_from=args.state_from,
         )
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"Installation failed: {exc}")
         return 2
-    print("Installation is complete. Open a new agent session and describe your need naturally.")
+    print(
+        "Installation is complete. Continue the original request now; "
+        "restart the agent only if it does not detect the Skill."
+    )
     print(f"Installed copies: {len(installed)}")
     return 0
 

@@ -1,4 +1,4 @@
 interface:
-  display_name: "Bվ������Դ����"
-  short_description: "��Bվ���ڼ����̡̳���Դ���롢�������Ϻ�������Դ����"
-  default_prompt: "ʹ�� $bilibili-tech-resource-discovery�������ҵ�ѧϰĿ��Ѱ���м�ֵ�ļ�����Ƶ����Դ�������֤�ݵ���Դ���ӡ�"
+  display_name: "B站技术资源发现"
+  short_description: "自动推荐学习视频，或深挖并验证可复用的开源技术项目"
+  default_prompt: "使用 $bilibili-tech-resource-discovery 理解我的自然语言需求：想学习时给我高质量视频和观看路线，想搭建时给我开源项目、工程资料、证据与限制。"

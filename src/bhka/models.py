@@ -137,6 +137,7 @@ class DiscoveryReport(BaseModel):
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     completed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     run_status: Literal["success", "partial_success", "failed"] = "success"
+    discovery_mode: Literal["learning", "resources"] = "resources"
     requirement: str
     expanded_queries: list[str]
     candidates_found: int

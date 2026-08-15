@@ -8,6 +8,7 @@
 - Cookie-file fallback
 - Recovery table
 - Successful handoff
+- Optional public-web enhancement
 
 ## First-run promise
 
@@ -33,6 +34,9 @@ The self-contained Skill folder includes its runtime. The installer copies it to
 Skill location, creates or updates the virtual environment under `<installed-skill>/runtime`,
 preserves an existing managed session, and starts first-time managed login. Use `--no-login` only for
 CI or offline installation checks. Do not require an external repository or a Codex-specific path.
+If Windows has locked an older runtime launcher, the installer silently builds a fresh private
+environment and records it in `runtime/.venv-path`; resolve `<bhka>` using the rule in `SKILL.md`.
+Do not ask the user to close or restart the agent merely to complete an update.
 
 Plain `status` performs no network request. A locally complete authentication configuration returns
 exit code 0 with `VERIFY-NEEDED`; use `status --verify-auth` only when a network verification is
@@ -127,3 +131,12 @@ On success, tell the user:
 - where reports will be saved;
 - how to disable login by clearing both Bilibili authentication settings;
 - that the next request can be phrased naturally.
+
+## Optional public-web enhancement
+
+Firecrawl is optional. Do not ask a first-time user to create an account or API key before their
+basic workflow works. If they choose broader public-web coverage, store `FIRECRAWL_API_KEY` only in
+the installed runtime's local `.env`; never echo it, pass it on the command line, copy it into the
+Skill package, or place it in a report. `discover` uses it automatically and safely falls back to the
+existing sources when Firecrawl is unavailable. The provider does not replace Bilibili login,
+subtitle/comment retrieval, resource evaluation, or license verification.
