@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import json
-import math
 import re
 import time
 from collections import defaultdict
@@ -187,6 +186,8 @@ def aggregate_candidates(results: list[SearchResult]) -> list[SearchCandidate]:
         candidates.append(SearchCandidate(
             source_id=source_id,
             webpage_url=hits[0].webpage_url,
+            title=next((hit.title for hit in hits if hit.title), ""),
+            description=next((hit.description for hit in hits if hit.description), ""),
             matched_queries=matched_queries,
             best_rank=best_rank,
             discovery_score=round(score, 4),
@@ -813,9 +814,10 @@ class DiscoveryPipeline:
         planned_queries: list[str] | None = None,
         seed_video_urls: list[str] | None = None,
         seed_resource_urls: list[str] | None = None,
-        bilibili_search: str = "off",
+        bilibili_search: str = "auto",
         discovery_mode: str = "resources",
         progress: Callable[[str], None] | None = None,
+        checkpoint: Callable[[list[DiscoveredVideo]], None] | None = None,
     ) -> DiscoveryReport:
         started_at = datetime.now(UTC)
         self._last_bilibili_request_at = None
@@ -838,7 +840,9 @@ class DiscoveryPipeline:
                 raise ValueError("planned_queries must contain between 1 and 8 unique queries")
         else:
             queries = expand_queries(requirement)
-        per_query = min(20, max(5, math.ceil(max_candidates / len(queries)) + 2))
+        auto_query_budget = min(3, len(queries))
+        search_queries = queries[:auto_query_budget] if bilibili_search == "auto" else queries
+        per_query = min(20, max_candidates)
         hits = seed_video_results(seed_video_urls or [], requirement)
         verify_resources = discovery_mode == "resources"
         direct_resources = prepare_direct_resources(
@@ -853,8 +857,9 @@ class DiscoveryPipeline:
         stopped_at_query: str | None = None
         stop_reason: str | None = None
         failure_category: str | None = None
-        search_target = min(max_candidates, max(5, deep_limit))
-        public_web_target = max(1, min(5, deep_limit))
+        breadth_floor = 15 if discovery_mode == "learning" else 25
+        search_target = min(max_candidates, max(breadth_floor, deep_limit * 3))
+        public_web_target = search_target
         public_video_count = len({hit.source_id for hit in hits})
         skip_internal_search = (
             bilibili_search == "off"
@@ -921,7 +926,7 @@ class DiscoveryPipeline:
                 limitations.append(
                     "Configured Bilibili session is not logged in; coverage is limited to public data."
                 )
-        for index, query in enumerate(queries, 1):
+        for index, query in enumerate(search_queries, 1):
             if skip_internal_search:
                 break
             if progress:
@@ -991,6 +996,21 @@ class DiscoveryPipeline:
                             else retry_exc.category
                         )
                         break
+        if (
+            bilibili_search == "auto"
+            and not skip_internal_search
+            and stop_reason is None
+            and len(queries) > len(search_queries)
+        ):
+            skipped_queries = len(queries) - len(search_queries)
+            stop_reason = "bounded_auto_fallback_completed"
+            events.append(DiscoveryEvent(
+                phase="search",
+                status="stopped_early",
+                detail=(
+                    f"automatic discovery is limited to {auto_query_budget} internal queries"
+                ),
+            ))
         if successful_queries == 0 and not hits and not direct_resources:
             run_status = "failed"
         elif failed_queries:
@@ -1051,12 +1071,11 @@ class DiscoveryPipeline:
                     detail=candidate.source_id,
                 ))
                 continue
-            try:
-                self._pace_bilibili_request()
-                preview = self.source.preview(candidate.webpage_url)
+            if candidate.title:
+                candidate_text = candidate.description or ""
                 if strict_filter and not passes_hard_relevance(
-                    preview.title,
-                    preview.description,
+                    candidate.title,
+                    candidate_text,
                     requirement,
                 ):
                     events.append(DiscoveryEvent(
@@ -1066,51 +1085,77 @@ class DiscoveryPipeline:
                     ))
                     continue
                 relevance = preview_relevance(
-                    preview.title,
-                    preview.description,
+                    candidate.title,
+                    candidate_text,
                     requirement,
                 )
-            except DataSourceError as exc:
-                if exc.category == "rate_limited":
-                    failed_queries += 1
-                    failure_category = exc.category
-                    stop_reason = "http_412"
-                    events.append(DiscoveryEvent(
-                        phase="candidate_preview",
-                        status="http_412",
-                        detail=candidate.source_id,
-                    ))
-                    events.append(DiscoveryEvent(
-                        phase="deep_inspection",
-                        status="skipped_due_to_circuit_breaker",
-                    ))
-                    limitations.append(str(exc))
-                    return DiscoveryReport(
-                        started_at=started_at,
-                        completed_at=datetime.now(UTC),
-                        run_status="partial_success" if successful_queries else "failed",
-                        discovery_mode=discovery_mode,
-                        requirement=requirement,
-                        expanded_queries=queries,
-                        candidates_found=len(candidates),
-                        deep_inspection_limit=deep_limit,
-                        successful_queries=successful_queries,
-                        failed_queries=failed_queries,
-                        skipped_queries=skipped_queries,
-                        stop_reason=stop_reason,
-                        failure_category=failure_category,
-                        candidates=candidates,
-                        resources=rank_resources(merge_resource_pool(direct_resources)),
-                        direct_resources=direct_resources,
-                        events=events,
-                        evidence_limitations=limitations,
+                preview_links = _resource_locators(candidate_text)
+                events.append(DiscoveryEvent(
+                    phase="candidate_filter",
+                    status="ranked_from_search_metadata",
+                    detail=candidate.source_id,
+                ))
+            else:
+                try:
+                    self._pace_bilibili_request()
+                    preview = self.source.preview(candidate.webpage_url)
+                    if strict_filter and not passes_hard_relevance(
+                        preview.title,
+                        preview.description,
+                        requirement,
+                    ):
+                        events.append(DiscoveryEvent(
+                            phase="candidate_filter",
+                            status="rejected",
+                            detail=candidate.source_id,
+                        ))
+                        continue
+                    relevance = preview_relevance(
+                        preview.title,
+                        preview.description,
+                        requirement,
                     )
-                limitations.append(f"Could not preview {candidate.source_id}: {exc}")
-                continue
-            except ValueError as exc:
-                limitations.append(f"Could not preview {candidate.source_id}: {exc}")
-                continue
-            preview_links = _resource_locators(preview.description)
+                    preview_links = _resource_locators(preview.description)
+                except DataSourceError as exc:
+                    if exc.category == "rate_limited":
+                        failed_queries += 1
+                        failure_category = exc.category
+                        stop_reason = "http_412"
+                        events.append(DiscoveryEvent(
+                            phase="candidate_preview",
+                            status="http_412",
+                            detail=candidate.source_id,
+                        ))
+                        events.append(DiscoveryEvent(
+                            phase="deep_inspection",
+                            status="skipped_due_to_circuit_breaker",
+                        ))
+                        limitations.append(str(exc))
+                        return DiscoveryReport(
+                            started_at=started_at,
+                            completed_at=datetime.now(UTC),
+                            run_status="partial_success" if successful_queries else "failed",
+                            discovery_mode=discovery_mode,
+                            requirement=requirement,
+                            expanded_queries=queries,
+                            candidates_found=len(candidates),
+                            deep_inspection_limit=deep_limit,
+                            successful_queries=successful_queries,
+                            failed_queries=failed_queries,
+                            skipped_queries=skipped_queries,
+                            stop_reason=stop_reason,
+                            failure_category=failure_category,
+                            candidates=candidates,
+                            resources=rank_resources(merge_resource_pool(direct_resources)),
+                            direct_resources=direct_resources,
+                            events=events,
+                            evidence_limitations=limitations,
+                        )
+                    limitations.append(f"Could not preview {candidate.source_id}: {exc}")
+                    continue
+                except ValueError as exc:
+                    limitations.append(f"Could not preview {candidate.source_id}: {exc}")
+                    continue
             project_links = sum(
                 classify_resource(locator)[0] in {"code_repository", "hardware_project"}
                 for locator in preview_links
@@ -1185,6 +1230,13 @@ class DiscoveryPipeline:
                 status="success",
                 detail=candidate.source_id,
             ))
+            if checkpoint:
+                try:
+                    checkpoint(list(videos))
+                except (OSError, TypeError, ValueError) as exc:
+                    limitations.append(
+                        f"Could not update the local deep-inspection checkpoint: {exc}"
+                    )
         if discovery_mode == "learning":
             videos.sort(key=lambda item: (-item.suitability_score, -item.discovery_score))
         else:

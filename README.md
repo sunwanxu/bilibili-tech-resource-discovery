@@ -7,7 +7,7 @@
 系统会先理解你最终想要的是“学习”还是“搭建”：学习时快速给出视频课程与观看顺序；搭建时联合网页索引、B 站内容证据与开源项目平台，验证并排序源码、PCB 工程、设计资料和技术路线。
 
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Version](https://img.shields.io/badge/version-0.7.0-6f42c1)](https://github.com/sunwanxu/bilibili-tech-resource-discovery)
+[![Version](https://img.shields.io/badge/version-0.8.0-6f42c1)](https://github.com/sunwanxu/bilibili-tech-resource-discovery)
 [![License: MIT](https://img.shields.io/badge/License-MIT-2ea44f.svg)](LICENSE)
 [![Agent Skill](https://img.shields.io/badge/Agent%20Skill-Codex%20%7C%20OpenCode-111827)](skills/bilibili-tech-resource-discovery)
 
@@ -37,7 +37,8 @@
 | 自然语言需求理解 | 从目标、技术栈、型号、平台、能力水平和资源偏好生成搜索计划 |
 | 自动双模式 | 想学习时走快速课程路径；要代码、工程文件或仓库时走深度资源路径 |
 | 多源候选发现 | 联合普通网页索引、B 站搜索、GitHub、Gitee、立创开源平台及公开项目站点 |
-| 可选 Firecrawl 增强 | 扩大公开网页覆盖并提取动态页面；未配置时自动使用原有发现流程 |
+| 零配置公开索引 | 无需 API Key 即可发现 B 站、GitHub、Gitee 与立创开源资源 |
+| 可选 Firecrawl 增强 | 扩大公开网页覆盖；失败时自动回退到内置索引 |
 | B 站证据读取 | 获取可用的视频元数据、简介、字幕和有上限的评论样本 |
 | 隐藏链接挖掘 | 从简介、评论和字幕中提取仓库、硬件项目、文档、网盘和受限资源线索 |
 | 工程完整性验证 | 独立检查源码、原理图、PCB、BOM、Gerber、固件、文档和实物验证信号 |
@@ -126,7 +127,7 @@ Skill 自带运行源码和跨客户端安装器，不依赖仓库其他目录�
 安装器会验证实际执行的是 Skill 自带版本：
 
 ```text
-Runtime verified: bhka 0.7.0
+Runtime verified: bhka 0.8.0
 ```
 
 > [!TIP]
@@ -225,24 +226,29 @@ Copy-Item .env.example .env
 
 AI 分析器是可选能力。没有 OpenAI 或 DeepSeek API Key 时，搜索、资源提取、字幕和评论读取仍可工作；单视频评价会使用明确标记的启发式基线。
 
-### 可选：扩大公开网页搜索范围
+### 默认：无需密钥的公开网页发现
 
-配置 Firecrawl 后，`discover` 会先用五条浅层、有界查询发现公开的 B 站视频页面、
-GitHub、Gitee 和立创开源项目。默认每条最多取 8 个结果，候选视频和项目链接分别最多
-保留 50 个。B 站内部搜索默认关闭，只能通过显式 `--bilibili-search on` 进行有界诊断。
-它能在 B 站冷却期间继续工作，也能明显减少对 B 站搜索端点的依赖。
+`discover` 默认使用五条浅层、有界的普通网页索引查询，发现公开的 B 站视频页面、
+GitHub、Gitee 和立创开源项目，不需要任何 API Key。默认每条最多取 8 个结果，候选视频
+和项目链接分别最多保留 50 个。公开索引视频不足时，默认 `auto` 最多执行 3 条差异化
+B 站内部查询，每条最多取得 20 个结果，资源型需求以约 25–40 个候选为目标；不会机械
+执行全部 5–8 条扩展查询。使用 `--bilibili-search off` 可完全禁用内部查询。
+
+### 可选：使用 Firecrawl 扩大覆盖
 
 ```dotenv
 FIRECRAWL_API_KEY=fc-your-key
 ```
 
-Firecrawl 是可选增强：没有 Key、服务不可用或认证失败时，现有 B 站和宿主 AI 搜索流程
-仍会继续。Key 只保存在本地 `.env`，不会写入报告、日志或浏览器插件。使用云端服务时，
-请同时遵守 Firecrawl 和目标网站的服务条款。
+Firecrawl 是可选增强：没有 Key、服务不可用、认证失败或没有返回可用结果时，程序会
+自动使用内置的无密钥公开索引。Key 只保存在本地 `.env`，不会写入报告、日志或浏览器
+插件。使用云端服务时，请同时遵守 Firecrawl 和目标网站的服务条款。
 
 `discover` 默认最多保留 80 个候选，但只深查价值最高的 8 个。公开网页候选直接进入
 有界深查，不再先调用 B 站预览接口；相同需求、搜索词和 BV 的证据默认缓存 7 天。
 `--summary-json` 会输出 UTF-8 机器可读结果，避免 PowerShell 读取 Markdown 时出现乱码。
+每完成一个视频深查，程序还会原子写入 `data/checkpoints/.../latest.json`；即使后续候选
+异常或进程中断，已经完成的深查结果也不会全部丢失。
 
 Skill 的私有运行环境使用普通 wheel 安装，不使用 editable `.pth` 指针。开发者在源码
 仓库内仍可自行使用 editable 模式，但它不会出现在普通用户的安装路径中。

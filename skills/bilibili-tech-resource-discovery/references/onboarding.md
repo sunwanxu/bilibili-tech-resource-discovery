@@ -132,11 +132,12 @@ On success, tell the user:
 - how to disable login by clearing both Bilibili authentication settings;
 - that the next request can be phrased naturally.
 
-## Optional public-web enhancement
+## Public-web discovery and optional enhancement
 
-Firecrawl is optional. Do not ask a first-time user to create an account or API key before their
-basic workflow works. If they choose broader public-web coverage, store `FIRECRAWL_API_KEY` only in
-the installed runtime's local `.env`; never echo it, pass it on the command line, copy it into the
-Skill package, or place it in a report. `discover` uses it automatically and safely falls back to the
-existing sources when Firecrawl is unavailable. The provider does not replace Bilibili login,
-subtitle/comment retrieval, resource evaluation, or license verification.
+Normal public-web discovery requires no account or API key. The built-in public index searches
+indexed Bilibili video pages plus GitHub, Gitee, and OSHWHub projects. Firecrawl is an optional
+coverage enhancement only. If configured, store `FIRECRAWL_API_KEY` in the installed runtime's local
+`.env`; never echo it, pass it on the command line, copy it into the Skill package, or place it in a
+report. `discover` tries Firecrawl first and falls back to the keyless index when needed. Neither
+provider replaces Bilibili login, subtitle/comment retrieval, resource evaluation, or license
+verification.

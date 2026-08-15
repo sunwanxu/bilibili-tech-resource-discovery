@@ -359,6 +359,8 @@ class YtDlpDataSource:
                     webpage_url=f"https://www.bilibili.com/video/{source_id}",
                     query=query.strip(),
                     rank=rank,
+                    title=str(item.get("title") or "").strip(),
+                    description=str(item.get("description") or "").strip(),
                 ))
         self._write_cache(
             self._cache_path("search", search_key),

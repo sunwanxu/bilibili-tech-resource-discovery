@@ -26,7 +26,7 @@ the installer writes this pointer only when a running Windows agent has locked a
 - macOS/Linux: `<skill>/runtime/<environment>/bin/bhka`
 
 Treat that exact absolute executable path as `<bhka>`. Never invoke a bare `bhka` from `PATH`; it may
-resolve to an older installation. Confirm `<bhka> --version` reports `bhka 0.7.0` before a smoke test.
+resolve to an older installation. Confirm `<bhka> --version` reports `bhka 0.8.0` before a smoke test.
 Use `<skill>/runtime` whenever a command requests `--project-root`. During source development only,
 an explicitly supplied external `bilibili-hidden-knowledge-agent` repository may replace the bundled
 runtime.
@@ -111,37 +111,42 @@ For `resources`, use multi-source discovery:
 2. Use ordinary web search to find 15-40 public Bilibili video URLs with four to six precise
    `site:bilibili.com/video` queries. Prefer candidates whose snippets or descriptions expose
    repositories, hardware projects, project names, or downloadable engineering artifacts.
-3. Keep Bilibili internal search disabled during normal discovery. Use one precise internal query
-   only for an explicit, bounded diagnostic when public indexes are unavailable or demonstrably
-   insufficient. Never use repeated internal queries as the primary discovery path.
+3. Let the default `auto` mode use at most three different, precise Bilibili internal queries when
+   public indexes do not provide enough video candidates. Each query may contribute up to 20 raw
+   results; stop around 25 strong candidates for resource requests or 15 for learning requests.
+   Never execute every expansion mechanically; use `off` when the user wants zero internal search.
 4. Pass public Bilibili URLs with repeated `--candidate-url` and direct project links with repeated
    `--resource-url`. These are internal host-AI details, not user inputs.
 
-When `FIRECRAWL_API_KEY` is already configured in the bundled runtime, leave `--web-search auto` in
-place. The runtime then performs five shallow, bounded public-web queries before direct Bilibili
-discovery and contributes public Bilibili URLs plus direct project links to the same evidence pool. Treat this
-as an optional coverage enhancement: never require a Firecrawl key for normal use, never put the key
-in a command line or report, and continue with existing sources when the provider is unavailable.
-Use `--web-search off` for offline tests or when the user explicitly disables the provider.
+Leave `--web-search auto` in place for normal use. With no setup, the runtime uses a built-in,
+keyless public index for five shallow searches covering Bilibili, GitHub, Gitee, and OSHWHub. When
+`FIRECRAWL_API_KEY` is already configured, Firecrawl is tried first and the keyless index takes over
+if it returns no usable results. Never require a Firecrawl key, put the key in a command line or
+report, or ask the user to find candidate URLs. Use `--web-search off` only for offline tests or when
+the user explicitly disables public-web discovery; use `--web-search public` to force the no-key path.
 
 Example internal invocation for resource discovery:
 
 ```text
-<bhka> discover "<natural-language requirement>" --query "<precise topic>" --candidate-url "<Bilibili URL>" --resource-url "<repository URL>" --max-candidates 80 --deep 8 --comments --bilibili-search off --project-root <skill>/runtime
+<bhka> discover "<natural-language requirement>" --query "<precise topic>" --candidate-url "<Bilibili URL>" --resource-url "<repository URL>" --max-candidates 80 --deep 8 --comments --bilibili-search auto --project-root <skill>/runtime
 ```
 
 For learning discovery, pass `--mode learning --deep 4 --no-comments`; for resource discovery pass
 `--mode resources`. The default `--mode auto` performs the same intent selection from the natural
 language requirement. These flags are host-AI implementation details, not user instructions.
 
-Keep `--bilibili-search off` for normal runs; this is the runtime default. Use `on` only for a
-deliberate, bounded internal-search diagnostic. Candidate breadth and deep inspection are separate:
-return many relevant candidate links, but fetch subtitles and comments only for the best bounded set.
+Keep `--bilibili-search auto` for normal runs; it stops after at most three discovery queries. Use
+`on` only for a deliberate diagnostic and `off` for zero internal-search requests. Candidate breadth and deep
+inspection are separate: return many relevant candidate links, but fetch subtitles and comments only
+for the best bounded set.
+Each completed deep inspection is written atomically to a local checkpoint, so a later malformed
+candidate or process interruption does not erase the work already completed.
 
 Do not ask the user to invent keywords or identify the official problem title. Use the host AI's
 research and reasoning to derive them. If no explicit query plan is supplied, the runtime uses a
-deterministic entity-preserving fallback. If ordinary web search is unavailable, continue with
-bounded Bilibili discovery and state that the public-web and direct-repository coverage is missing.
+deterministic entity-preserving fallback. If both public providers are unavailable, retain cache and
+explicit evidence and state that public coverage is incomplete. Do not silently claim that no
+resources exist.
 
 Reduce the limits for smoke tests or after rate limiting. Do not implement bulk crawling,
 authentication bypass, CAPTCHA automation, or undocumented protocols. Keep comments bounded.

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import re
+import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from html.parser import HTMLParser
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, quote_plus, urlparse
 from urllib.request import Request, urlopen
 
 from .discovery import extract_query_anchors
@@ -63,6 +65,10 @@ class FirecrawlError(RuntimeError):
         self.retryable = retryable
 
 
+class PublicIndexError(RuntimeError):
+    """Failure from the built-in, keyless public search-index fallback."""
+
+
 @dataclass(frozen=True)
 class FirecrawlSearchHit:
     url: str
@@ -81,6 +87,123 @@ class PublicWebDiscovery:
 
 
 JsonTransport = Callable[[Request, int], dict[str, Any]]
+TextTransport = Callable[[Request, int], str]
+
+
+class PublicIndexClient:
+    """Small no-key public-index client used when Firecrawl is not configured."""
+
+    def __init__(
+        self,
+        *,
+        base_url: str = "https://html.duckduckgo.com/html/",
+        github_base_url: str = "https://api.github.com/search/repositories",
+        timeout_seconds: int = 15,
+        transport: TextTransport | None = None,
+    ):
+        self.base_url = base_url
+        self.github_base_url = github_base_url
+        self.timeout_seconds = timeout_seconds
+        self._transport = transport or _default_text_transport
+
+    def search(self, query: str, *, limit: int = 8) -> list[FirecrawlSearchHit]:
+        normalized = " ".join(query.split())
+        if not normalized:
+            raise ValueError("Public-index search query cannot be empty")
+        if not 1 <= limit <= 20:
+            raise ValueError("Public-index search limit must be between 1 and 20")
+        if normalized.lower().startswith("site:github.com "):
+            return self._search_github(normalized[16:], limit=limit)
+        request = Request(
+            f"{self.base_url}?q={quote_plus(normalized)}",
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 Chrome/124.0 Safari/537.36"
+                ),
+            },
+        )
+        try:
+            payload = self._transport(request, self.timeout_seconds)
+        except HTTPError as exc:
+            raise PublicIndexError(f"Public index returned HTTP {exc.code}.") from exc
+        except (TimeoutError, URLError) as exc:
+            raise PublicIndexError("Public index could not be reached.") from exc
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise PublicIndexError("Public index returned an invalid response.") from exc
+        lowered = payload.lower()
+        if "anomaly-modal" in lowered or "challenge-form" in lowered:
+            raise PublicIndexError("Public index temporarily requested human verification.")
+        return _parse_public_index_payload(payload, limit=limit)
+
+    def _search_github(self, query: str, *, limit: int) -> list[FirecrawlSearchHit]:
+        query = re.sub(
+            r"\b(open[ -]?source|source code)\b",
+            " ",
+            query,
+            flags=re.IGNORECASE,
+        )
+        query = re.sub(r"(?:开源代码|开源资料|项目资料|开源|源码)", " ", query)
+        query = " ".join(query.split())
+        hits = self._request_github(query, limit=limit)
+        ascii_query = " ".join(
+            token for token in query.split() if re.search(r"[A-Za-z0-9]", token)
+        )
+        if not hits and ascii_query and ascii_query != query:
+            hits = self._request_github(ascii_query, limit=limit)
+        return hits
+
+    def _request_github(self, query: str, *, limit: int) -> list[FirecrawlSearchHit]:
+        request = Request(
+            f"{self.github_base_url}?q={quote_plus(query)}&per_page={limit}",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "bhka-public-index/0.8",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        try:
+            payload = json.loads(self._transport(request, self.timeout_seconds))
+        except HTTPError as exc:
+            raise PublicIndexError(f"GitHub public search returned HTTP {exc.code}.") from exc
+        except (TimeoutError, URLError) as exc:
+            raise PublicIndexError("GitHub public search could not be reached.") from exc
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError) as exc:
+            raise PublicIndexError("GitHub public search returned an invalid response.") from exc
+        rows = payload.get("items", []) if isinstance(payload, dict) else []
+        return [
+            FirecrawlSearchHit(
+                url=str(item.get("html_url") or ""),
+                title=str(item.get("full_name") or ""),
+                description=str(item.get("description") or ""),
+            )
+            for item in rows[:limit]
+            if isinstance(item, dict) and _is_http_url(str(item.get("html_url") or ""))
+        ]
+
+
+class _DuckDuckGoResultParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.results: list[tuple[str, str]] = []
+        self._href: str | None = None
+        self._title: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = dict(attrs)
+        if tag == "a" and "result__a" in (values.get("class") or "").split():
+            self._href = values.get("href")
+            self._title = []
+
+    def handle_data(self, data: str) -> None:
+        if self._href:
+            self._title.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self._href:
+            self.results.append((self._href, " ".join(self._title).strip()))
+            self._href = None
+            self._title = []
 
 
 class FirecrawlClient:
@@ -219,9 +342,9 @@ def build_firecrawl_queries(requirement: str, mode: str = "resources") -> list[s
         raise ValueError("mode must be learning or resources")
     focus = " ".join(extract_query_anchors(topic)) or topic
     return [
-        f"{focus} 开源代码 GitHub",
-        f"{focus} 源码 Gitee",
-        f"{focus} 立创开源 OSHWHub",
+        f"site:github.com {focus} 开源代码",
+        f"site:gitee.com {focus} 源码",
+        f"site:oshwhub.com {focus} 立创开源",
         f"site:bilibili.com/video {focus} 开源 项目资料",
         f"site:bilibili.com/video {focus} 教程 实战 方案",
     ]
@@ -253,6 +376,34 @@ def discover_with_firecrawl(
                 _collect_url(url.rstrip(".,;:!?"), discovery)
     if not discovery.result_count and first_error:
         raise first_error
+    return discovery
+
+
+def discover_with_public_index(
+    client: PublicIndexClient,
+    requirement: str,
+    *,
+    per_query: int = 8,
+    mode: str = "resources",
+    progress: Callable[[str], None] | None = None,
+) -> PublicWebDiscovery:
+    """Discover candidates without an API key using ordinary indexed pages."""
+    discovery = PublicWebDiscovery(queries=build_firecrawl_queries(requirement, mode=mode))
+    for index, query in enumerate(discovery.queries, 1):
+        if progress:
+            progress(f"Public-index search {index}/{len(discovery.queries)}")
+        try:
+            hits = client.search(query, limit=per_query)
+        except PublicIndexError:
+            discovery.failures.append("public_index")
+            continue
+        discovery.result_count += len(hits)
+        for hit in hits:
+            _collect_url(hit.url, discovery)
+            for url in URL_RE.findall(f"{hit.description}\n{hit.markdown}"):
+                _collect_url(url.rstrip(".,;:!?"), discovery)
+    if not discovery.result_count and discovery.failures:
+        raise PublicIndexError("Public-index discovery was unavailable.")
     return discovery
 
 
@@ -316,6 +467,53 @@ def _search_rows(response: dict[str, Any]) -> list[Any]:
     return []
 
 
+def _parse_public_index_payload(payload: str, *, limit: int) -> list[FirecrawlSearchHit]:
+    """Accept DuckDuckGo HTML and RSS fixtures/providers without brittle regex parsing."""
+    hits: list[FirecrawlSearchHit] = []
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError:
+        parser = _DuckDuckGoResultParser()
+        parser.feed(payload)
+        rows = [(url, title, "") for url, title in parser.results]
+    else:
+        rows = [
+            (
+                (item.findtext("link") or "").strip(),
+                (item.findtext("title") or "").strip(),
+                (item.findtext("description") or "").strip(),
+            )
+            for item in root.findall(".//item")
+        ]
+    for raw_url, title, description in rows:
+        url = _unwrap_public_index_url(raw_url)
+        if not _is_http_url(url):
+            continue
+        hits.append(FirecrawlSearchHit(url=url, title=title, description=description))
+        if len(hits) >= limit:
+            break
+    return hits
+
+
+def _unwrap_public_index_url(url: str) -> str:
+    if url.startswith("//"):
+        url = f"https:{url}"
+    try:
+        parsed = urlparse(url)
+        if parsed.hostname in {"duckduckgo.com", "www.duckduckgo.com"}:
+            target = parse_qs(parsed.query).get("uddg", [])
+            if target:
+                return target[0]
+    except ValueError:
+        return ""
+    return url
+
+
 def _default_transport(request: Request, timeout_seconds: int) -> dict[str, Any]:
     with urlopen(request, timeout=timeout_seconds) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def _default_text_transport(request: Request, timeout_seconds: int) -> str:
+    with urlopen(request, timeout=timeout_seconds) as response:
+        return response.read().decode("utf-8", errors="replace")
