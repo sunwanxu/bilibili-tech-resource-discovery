@@ -67,6 +67,8 @@ class SearchResult(BaseModel):
     query: str
     rank: int
     provenance: str = "bilibili_search"
+    title: str = ""
+    description: str = ""
 
 
 class AuthenticationStatus(BaseModel):
@@ -78,6 +80,8 @@ class AuthenticationStatus(BaseModel):
 class SearchCandidate(BaseModel):
     source_id: str
     webpage_url: str
+    title: str = ""
+    description: str = ""
     matched_queries: list[str] = Field(default_factory=list)
     best_rank: int
     discovery_score: float
@@ -128,7 +132,7 @@ class DiscoveredVideo(BaseModel):
 
 
 class DiscoveryReport(BaseModel):
-    schema_version: str = "0.7.0"
+    schema_version: str = "0.8.0"
     run_id: str = Field(
         default_factory=lambda: (
             datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ") + "-" + uuid4().hex[:8]

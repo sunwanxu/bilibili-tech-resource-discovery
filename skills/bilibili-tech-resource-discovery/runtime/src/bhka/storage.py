@@ -8,7 +8,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
-from .models import DiscoveryReport, PartSelection, RawVideoData, VideoAnalysisSchema
+from .models import (
+    DiscoveredVideo,
+    DiscoveryReport,
+    PartSelection,
+    RawVideoData,
+    VideoAnalysisSchema,
+)
 
 COOLDOWN_MINUTES = (2, 5, 10)
 COOLDOWN_ESCALATION_WINDOW = timedelta(hours=2)
@@ -120,6 +126,28 @@ class FileStorage:
                 },
             )
         return json_path, report_path
+
+    def save_discovery_checkpoint(
+        self,
+        requirement: str,
+        discovery_mode: str,
+        videos: list[DiscoveredVideo],
+    ) -> Path:
+        """Atomically retain completed deep inspections before the full report exists."""
+        readable = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "-", requirement).strip("-")
+        digest = hashlib.sha256(requirement.encode("utf-8")).hexdigest()[:8]
+        stem = f"{readable[:48] or 'search'}-{digest}"
+        path = self.root / "data" / "checkpoints" / stem / "latest.json"
+        self._write_json(path, {
+            "schema_version": 1,
+            "status": "in_progress",
+            "requirement": requirement,
+            "discovery_mode": discovery_mode,
+            "completed_video_count": len(videos),
+            "updated_at": datetime.now(UTC).isoformat(),
+            "videos": [video.model_dump(mode="json") for video in videos],
+        })
+        return path
 
     def load_discovery_seeds(
         self,
@@ -244,7 +272,7 @@ def render_markdown(a: VideoAnalysisSchema) -> str:
 def render_discovery_markdown(report: DiscoveryReport) -> str:
     query_lines = "\n".join(f"- {query}" for query in report.expanded_queries)
     candidate_lines = "\n".join(
-        f"- [{item.source_id}]({item.webpage_url}) — "
+        f"- [{item.title or item.source_id}]({item.webpage_url}) — "
         f"queries: {', '.join(item.matched_queries)}; "
         f"sources: {', '.join(item.provenance) or 'unknown'}"
         for item in report.candidates

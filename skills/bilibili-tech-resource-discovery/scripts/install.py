@@ -54,6 +54,7 @@ def validate_bundle(source: Path) -> None:
         "scripts/install.py",
         "runtime/pyproject.toml",
         "runtime/src/bhka/cli.py",
+        "runtime/src/bhka/v1/cli.py",
     )
     missing = [relative for relative in required if not (source / relative).is_file()]
     if missing:
@@ -200,13 +201,13 @@ def runtime_environment(runtime: Path) -> Path:
     return runtime / environment_name
 
 
-def runtime_paths(runtime: Path) -> tuple[Path, Path]:
+def runtime_paths(runtime: Path) -> tuple[Path, Path, Path]:
     environment = runtime_environment(runtime)
     if os.name == "nt":
         scripts = environment / "Scripts"
-        return scripts / "python.exe", scripts / "bhka.exe"
+        return scripts / "python.exe", scripts / "bhka.exe", scripts / "bhka-v1.exe"
     scripts = environment / "bin"
-    return scripts / "python", scripts / "bhka"
+    return scripts / "python", scripts / "bhka", scripts / "bhka-v1"
 
 
 def _managed_login_exists(runtime: Path) -> bool:
@@ -297,7 +298,7 @@ def install_runtime(target: Path, login: bool) -> None:
     expected_version = tomllib.loads(
         (runtime / "pyproject.toml").read_text(encoding="utf-8")
     )["project"]["version"]
-    python, bhka = runtime_paths(runtime)
+    python, bhka, bhka_v1 = runtime_paths(runtime)
     had_working_runtime = _runtime_python_works(python)
     if not _runtime_python_works(python):
         environment = runtime_environment(runtime)
@@ -308,7 +309,7 @@ def install_runtime(target: Path, login: bool) -> None:
                 environment = runtime / f".venv-{expected_version}-{uuid4().hex[:6]}"
         venv.EnvBuilder(with_pip=True).create(environment)
         _write_environment_pointer(runtime, environment)
-        python, bhka = runtime_paths(runtime)
+        python, bhka, bhka_v1 = runtime_paths(runtime)
     _remove_stale_package_artifacts(runtime_environment(runtime))
     print("Installing the private runtime...", flush=True)
     result = _pip_install(python, runtime)
@@ -330,7 +331,7 @@ def install_runtime(target: Path, login: bool) -> None:
             shutil.rmtree(environment, ignore_errors=True)
             raise RuntimeError(_install_error(replacement_result))
         _write_environment_pointer(runtime, environment)
-        python, bhka = runtime_paths(runtime)
+        python, bhka, bhka_v1 = runtime_paths(runtime)
     _remove_stale_package_artifacts(runtime_environment(runtime))
     verification = subprocess.run(
         [str(bhka), "--version"],
@@ -343,10 +344,18 @@ def install_runtime(target: Path, login: bool) -> None:
         raise RuntimeError(
             "The installed command does not match the bundled runtime version."
         )
+    v1_verification = subprocess.run(
+        [str(bhka_v1), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if v1_verification.returncode:
+        raise RuntimeError("The v1 natural-language command was not installed correctly.")
     print(f"Runtime verified: {expected_output} ({bhka})", flush=True)
     if login and not _managed_login_exists(runtime):
         result = subprocess.run(
-            [str(bhka), "login", "--project-root", str(runtime)],
+            [str(bhka_v1), "login", "--project-root", str(runtime)],
             check=False,
         )
         if result.returncode:
@@ -386,7 +395,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="target agent; auto detects installed clients",
     )
     parser.add_argument("--force", action="store_true", help="update an existing installation")
-    parser.add_argument("--no-login", action="store_true", help="install without opening login")
+    login_group = parser.add_mutually_exclusive_group()
+    login_group.add_argument(
+        "--login",
+        action="store_true",
+        help="open the private Edge login window after installation",
+    )
+    login_group.add_argument(
+        "--no-login",
+        action="store_true",
+        help="install without opening login",
+    )
     parser.add_argument(
         "--state-from",
         type=Path,
@@ -398,11 +417,23 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.login:
+        login = True
+    elif args.no_login:
+        login = False
+    elif sys.stdin.isatty():
+        answer = input(
+            "是否现在打开独立 Edge 窗口登录 B 站？登录后字幕和评论覆盖更好。 [Y/n] "
+        ).strip().casefold()
+        login = answer not in {"n", "no", "否"}
+    else:
+        login = False
+        print("No interactive consent was available; Bilibili login was skipped.")
     try:
         installed = install(
             args.agent,
             args.force,
-            not args.no_login,
+            login,
             home=args.home,
             state_from=args.state_from,
         )

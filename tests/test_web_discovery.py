@@ -8,8 +8,10 @@ import pytest
 from bhka.web_discovery import (
     FirecrawlClient,
     FirecrawlError,
+    PublicIndexClient,
     build_firecrawl_queries,
     discover_with_firecrawl,
+    discover_with_public_index,
     learning_search_focus,
 )
 
@@ -203,3 +205,78 @@ def test_malformed_ipv6_url_is_skipped_without_aborting_discovery() -> None:
     )
 
     assert result.resource_urls == ["https://github.com/example/project"]
+
+
+def test_keyless_public_index_collects_bilibili_and_chinese_project_links() -> None:
+    rss = """<?xml version="1.0" encoding="utf-8"?>
+    <rss><channel>
+      <item><title>PCB tutorial</title>
+        <link>https://www.bilibili.com/video/BV1xx411c7mD</link>
+        <description>Project https://oshwhub.com/example/blue-pill</description>
+      </item>
+      <item><title>Gitee mirror</title>
+        <link>https://gitee.com/example/stm32-board</link>
+        <description>source</description>
+      </item>
+    </channel></rss>"""
+    captured = []
+
+    def transport(request, timeout):
+        captured.append((request.full_url, timeout))
+        if "api.github.com" in request.full_url:
+            return json.dumps({"items": [{
+                "html_url": "https://github.com/example/blue-pill",
+                "full_name": "example/blue-pill",
+                "description": "PCB project",
+            }]})
+        return rss
+
+    result = discover_with_public_index(
+        PublicIndexClient(transport=transport, timeout_seconds=9),
+        "STM32F103C8T6 PCB 开源资料",
+        per_query=4,
+    )
+
+    assert len(captured) == 5
+    assert all("?q=" in url for url, _ in captured)
+    assert result.video_urls == ["https://www.bilibili.com/video/BV1xx411c7mD"]
+    assert result.resource_urls == [
+        "https://github.com/example/blue-pill",
+        "https://oshwhub.com/example/blue-pill",
+        "https://gitee.com/example/stm32-board",
+    ]
+
+
+def test_public_index_skips_malformed_result_url() -> None:
+    rss = """<rss><channel>
+      <item><title>bad</title><link>https://[broken/path</link></item>
+      <item><title>good</title><link>https://github.com/example/project</link></item>
+    </channel></rss>"""
+    client = PublicIndexClient(transport=lambda _request, _timeout: rss)
+
+    hits = client.search("STM32 PCB")
+
+    assert [hit.url for hit in hits] == ["https://github.com/example/project"]
+
+
+def test_github_search_relaxes_cjk_terms_when_exact_query_is_empty() -> None:
+    urls = []
+
+    def transport(request, _timeout):
+        urls.append(request.full_url)
+        if len(urls) == 1:
+            return '{"items": []}'
+        return json.dumps({"items": [{
+            "html_url": "https://github.com/example/stm32-board",
+            "full_name": "example/stm32-board",
+        }]})
+
+    hits = PublicIndexClient(transport=transport).search(
+        "site:github.com STM32F103C8T6 PCB 最小系统 开源资料",
+        limit=3,
+    )
+
+    assert len(urls) == 2
+    assert "%E6%9C%80%E5%B0%8F" in urls[0]
+    assert "%E6%9C%80%E5%B0%8F" not in urls[1]
+    assert hits[0].url == "https://github.com/example/stm32-board"

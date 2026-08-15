@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bilibili-hidden-knowledge-agent"
-version = "0.7.0"
+version = "1.0.0"
 description = "Portable runtime for the Bilibili technical-resource discovery Skill"
 requires-python = ">=3.11"
 dependencies = [
@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 bhka = "bhka.cli:main"
+bhka-v1 = "bhka.v1.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/bhka"]

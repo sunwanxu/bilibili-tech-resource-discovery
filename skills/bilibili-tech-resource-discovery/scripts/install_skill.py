@@ -21,6 +21,7 @@ REQUIRED_FILES = (
     "scripts/install_skill.py",
     "runtime/pyproject.toml",
     "runtime/src/bhka/cli.py",
+    "runtime/src/bhka/v1/cli.py",
 )
 
 

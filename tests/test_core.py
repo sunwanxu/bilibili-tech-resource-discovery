@@ -98,6 +98,7 @@ def test_search_results_expose_analyze_compatible_canonical_ids(monkeypatch, tmp
             return {"entries": [{
                 "id": "116136268144356",
                 "url": "116136268144356",
+                "title": "FOC motor controller source walkthrough",
             }]}
 
     monkeypatch.setattr("bhka.source.YoutubeDL", FakeYoutubeDL)
@@ -115,6 +116,7 @@ def test_search_results_expose_analyze_compatible_canonical_ids(monkeypatch, tmp
 
     assert result.source_id == "av116136268144356"
     assert result.webpage_url.endswith("/av116136268144356")
+    assert result.title == "FOC motor controller source walkthrough"
 
 
 def test_repeated_internal_search_uses_local_cache(monkeypatch, tmp_path: Path):
@@ -321,15 +323,15 @@ def test_cli_exposes_runtime_version(capsys):
         cli_module.main(["--version"])
 
     assert exit_info.value.code == 0
-    assert capsys.readouterr().out.strip() == "bhka 0.7.0"
+    assert capsys.readouterr().out.strip() == "bhka 1.0.0"
 
 
-def test_discover_defaults_favor_broad_web_candidates_without_forcing_internal_search():
+def test_discover_defaults_use_broad_hybrid_candidate_discovery():
     args = cli_module.build_parser().parse_args(["discover", "ESP32 project"])
 
     assert args.max_candidates == 80
     assert args.deep == 8
-    assert args.bilibili_search == "off"
+    assert args.bilibili_search == "auto"
     assert args.mode == "auto"
 
 
@@ -342,6 +344,34 @@ def test_discover_accepts_explicit_internal_search_disable():
     ])
 
     assert args.bilibili_search == "off"
+
+
+def test_auto_internal_search_runs_at_most_three_queries():
+    class EmptySource:
+        def __init__(self):
+            self.settings = SimpleNamespace(
+                cookies_file=None,
+                cookies_from_browser=None,
+                rate_limit_seconds=0,
+            )
+            self.calls = 0
+
+        def search(self, _query, _limit):
+            self.calls += 1
+            return []
+
+    source = EmptySource()
+    report = DiscoveryPipeline(source).run(
+        "STM32F103C8T6 PCB 开源资料",
+        max_candidates=20,
+        deep_limit=2,
+        include_comments=False,
+    )
+
+    assert source.calls == 3
+    assert report.successful_queries == 3
+    assert report.skipped_queries == len(report.expanded_queries) - 3
+    assert report.stop_reason == "bounded_auto_fallback_completed"
 
 
 def test_discover_summary_json_is_clean_utf8_machine_output(tmp_path: Path, capsys):
@@ -559,7 +589,13 @@ def test_generic_filter_does_not_require_every_model_and_acronym():
 
 def test_aggregate_candidates_deduplicates_and_rewards_cross_query_hits():
     results = [
-        SearchResult(source_id="1", webpage_url="https://example/1", query="a", rank=3),
+        SearchResult(
+            source_id="1",
+            webpage_url="https://example/1",
+            query="a",
+            rank=3,
+            title="Complete STM32 PCB project",
+        ),
         SearchResult(source_id="1", webpage_url="https://example/1", query="b", rank=5),
         SearchResult(source_id="2", webpage_url="https://example/2", query="a", rank=1),
     ]
@@ -568,6 +604,7 @@ def test_aggregate_candidates_deduplicates_and_rewards_cross_query_hits():
 
     assert [candidate.source_id for candidate in candidates] == ["1", "2"]
     assert candidates[0].matched_queries == ["a", "b"]
+    assert candidates[0].title == "Complete STM32 PCB project"
 
 
 def test_public_web_video_candidates_are_normalized_deduplicated_and_attributed():
@@ -869,6 +906,7 @@ class FailingAuthPreflightSource:
             rate_limit_seconds=0,
         )
         self.search_calls = 0
+        self.preview_calls = 0
 
     def verify_auth(self):
         raise DataSourceError(
@@ -925,6 +963,7 @@ class AdaptiveCandidateSource:
             rate_limit_seconds=0,
         )
         self.search_calls = 0
+        self.preview_calls = 0
 
     def search(self, query: str, limit: int):
         self.search_calls += 1
@@ -936,11 +975,13 @@ class AdaptiveCandidateSource:
                 webpage_url=f"https://www.bilibili.com/video/BV123456789{index}",
                 query=query,
                 rank=index + 1,
+                title=f"2025 TI杯电赛K题小车方案 {index}",
             )
-            for index in range(5)
+            for index in range(limit)
         ]
 
     def preview(self, video: str):
+        self.preview_calls += 1
         return VideoMetadata(
             bvid="BV1234567890",
             title="2025 TI杯电赛K题小车完整方案",
@@ -1166,6 +1207,7 @@ def test_search_stops_when_first_precise_query_reaches_candidate_target():
     )
 
     assert source.search_calls == 1
+    assert source.preview_calls == 0
     assert report.successful_queries == 1
     assert report.failed_queries == 0
     assert report.skipped_queries == len(report.expanded_queries) - 1
@@ -1174,7 +1216,7 @@ def test_search_stops_when_first_precise_query_reaches_candidate_target():
 
 def test_public_web_candidates_can_replace_internal_search_for_breadth():
     source = AdaptiveCandidateSource()
-    urls = [f"https://www.bilibili.com/video/BV123456789{index}" for index in range(5)]
+    urls = [f"https://www.bilibili.com/video/BV12345678{index:02d}" for index in range(20)]
 
     report = DiscoveryPipeline(source).run(
         "2025 电赛 K题 小车",
@@ -1187,25 +1229,26 @@ def test_public_web_candidates_can_replace_internal_search_for_breadth():
 
     assert source.search_calls == 0
     assert report.stop_reason == "web_candidate_target_reached"
-    assert report.candidates_found == 5
+    assert report.candidates_found == 20
     assert all(item.provenance == ["web_index"] for item in report.candidates)
     assert len(report.videos) == 2
 
 
-def test_one_public_web_candidate_is_enough_when_only_one_video_will_be_inspected():
-    source = ExplicitCandidateSource()
+def test_sparse_public_candidates_trigger_one_broad_internal_query():
+    source = AdaptiveCandidateSource()
 
     report = DiscoveryPipeline(source).run(
         "FOC motor controller",
-        max_candidates=80,
+        max_candidates=20,
         deep_limit=1,
         include_comments=False,
         seed_video_urls=["https://www.bilibili.com/video/BV1234567890"],
         bilibili_search="auto",
     )
 
-    assert report.stop_reason == "web_candidate_target_reached"
-    assert source.fetch_calls == 1
+    assert source.search_calls == 1
+    assert report.stop_reason == "candidate_target_reached"
+    assert report.candidates_found == 20
     assert len(report.videos) == 1
 
 
@@ -1229,6 +1272,7 @@ def test_internal_search_can_be_disabled_even_when_web_candidates_are_sparse():
 def test_explicit_candidate_urls_are_deep_inspected_even_with_sparse_preview_metadata():
     source = ExplicitCandidateSource()
     urls = [f"https://www.bilibili.com/video/BV123456789{index}" for index in range(5)]
+    checkpoint_sizes = []
 
     report = DiscoveryPipeline(source).run(
         "FOC STM32 AS5600 无刷电机开源控制器",
@@ -1236,11 +1280,14 @@ def test_explicit_candidate_urls_are_deep_inspected_even_with_sparse_preview_met
         deep_limit=2,
         include_comments=True,
         seed_video_urls=urls,
+        bilibili_search="off",
+        checkpoint=lambda videos: checkpoint_sizes.append(len(videos)),
     )
 
     assert source.fetch_calls == 2
     assert source.preview_calls == 0
     assert len(report.videos) == 2
+    assert checkpoint_sizes == [1, 2]
     assert sum(
         event.status == "retained_explicit_candidate"
         for event in report.events
@@ -1262,6 +1309,7 @@ def test_learning_pipeline_skips_external_repository_verification(monkeypatch):
         seed_video_urls=["https://www.bilibili.com/video/BV1234567890"],
         seed_resource_urls=["https://github.com/example/course-assets"],
         discovery_mode="learning",
+        bilibili_search="off",
     )
 
     assert report.discovery_mode == "learning"
@@ -1401,6 +1449,28 @@ def test_failed_discovery_does_not_replace_latest_success(tmp_path: Path):
     assert success_json != failed_json
     assert success_json.exists() and failed_json.exists()
     assert latest.read_text(encoding="utf-8") == latest_before
+    assert not list(tmp_path.rglob("*.tmp"))
+
+
+def test_deep_inspection_checkpoint_is_atomic_and_machine_readable(tmp_path: Path):
+    storage = FileStorage(tmp_path)
+    video = DiscoveredVideo(
+        bvid="BV1234567890",
+        title="STM32 PCB",
+        webpage_url="https://www.bilibili.com/video/BV1234567890",
+        discovery_score=8,
+        suitability_score=9,
+        suitability_reason="complete design files",
+        open_source_status="public_source_no_license",
+        open_source_reason="repository is public",
+    )
+
+    path = storage.save_discovery_checkpoint("STM32 PCB", "resources", [video])
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    assert payload["status"] == "in_progress"
+    assert payload["completed_video_count"] == 1
+    assert payload["videos"][0]["bvid"] == "BV1234567890"
     assert not list(tmp_path.rglob("*.tmp"))
 
 

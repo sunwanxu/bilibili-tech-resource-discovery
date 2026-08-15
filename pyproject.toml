@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bilibili-hidden-knowledge-agent"
-version = "0.7.0"
-description = "Phase-1 Bilibili technical-video value analyzer"
+version = "1.0.0"
+description = "Natural-language Bilibili technical learning and open-source resource discovery"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -22,6 +22,7 @@ dev = ["pytest>=8.3,<10", "pyyaml>=6.0,<7", "ruff>=0.12,<1"]
 
 [project.scripts]
 bhka = "bhka.cli:main"
+bhka-v1 = "bhka.v1.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/bhka"]

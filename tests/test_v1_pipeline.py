@@ -1,0 +1,299 @@
+from dataclasses import dataclass, field
+
+from bhka.v1.contracts import (
+    DiscoveryCandidate,
+    DiscoveryMode,
+    EvidenceRecord,
+    IntentProfile,
+    NetworkBudget,
+    QueryPlan,
+    QuerySpec,
+    ResourceAccessStatus,
+    ResourceKind,
+    ResourceLicenseStatus,
+    ResourceRecord,
+    ResourceSearchStyle,
+    VerificationScope,
+)
+from bhka.v1.pipeline import CandidateReadError, PlatformCircuitBreak, V1DiscoveryPipeline
+
+
+def intent() -> IntentProfile:
+    return IntentProfile(
+        original_request="寻找 STM32 PCB 开源资料",
+        goal="找到可直接参考的 PCB 项目",
+        mode=DiscoveryMode.RESOURCE,
+    )
+
+
+class Planner:
+    def __init__(self, candidate_target: int = 20):
+        self.candidate_target = candidate_target
+
+    def plan(self, _intent):
+        return QueryPlan(
+            queries=[
+                QuerySpec(text="first", purpose="precise"),
+                QuerySpec(text="second", purpose="expand"),
+            ],
+            candidate_target=self.candidate_target,
+            selected_target=3,
+            deep_read_target=2,
+        )
+
+
+class Ranker:
+    def rank(self, _intent, candidates):
+        return sorted(candidates, key=lambda item: item.canonical_id)
+
+
+@dataclass
+class Store:
+    cached: list[DiscoveryCandidate] = field(default_factory=list)
+    candidate_checkpoints: int = 0
+    evidence_checkpoints: int = 0
+    resource_checkpoints: int = 0
+    recorded_events: list[tuple[str, str, str | None]] = field(default_factory=list)
+
+    def load_candidates(self, _intent):
+        return list(self.cached)
+
+    def save_candidates(self, _intent, candidates):
+        self.cached = list(candidates)
+        self.candidate_checkpoints += 1
+
+    def save_evidence(self, evidence):
+        self.evidence_checkpoints += 1
+
+    def save_resources(self, resources):
+        self.resource_checkpoints += 1
+
+    def record_event(self, phase, status, code=None):
+        self.recorded_events.append((phase, status, code))
+
+
+class CircuitDiscoverer:
+    calls = 0
+
+    def discover(self, query, *, budget):
+        self.calls += 1
+        if query.text == "second":
+            raise PlatformCircuitBreak("http_412")
+        return [
+            DiscoveryCandidate(
+                canonical_id="BV1",
+                url="https://www.bilibili.com/video/BV1",
+                title="candidate",
+                provenance=["bilibili_search_page"],
+                matched_queries=[query.text],
+            )
+        ]
+
+
+class Reader:
+    def __init__(self):
+        self.calls = 0
+
+    def read(self, candidate, *, budget, include_comments, retention):
+        self.calls += 1
+        return [
+            EvidenceRecord(
+                evidence_id=f"e-{candidate.canonical_id}",
+                subject_id=candidate.canonical_id,
+                source_kind="description",
+                source_url=candidate.url,
+            )
+        ]
+
+
+def test_412_during_search_stops_all_deep_reads_and_keeps_candidates():
+    reader = Reader()
+    store = Store()
+    pipeline = V1DiscoveryPipeline(
+        planner=Planner(),
+        discoverer=CircuitDiscoverer(),
+        ranker=Ranker(),
+        reader=reader,
+        store=store,
+    )
+
+    result = pipeline.run(intent(), budget=NetworkBudget())
+
+    assert result.status == "partial_success"
+    assert [item.canonical_id for item in result.selected_candidates] == ["BV1"]
+    assert reader.calls == 0
+    assert result.budget.circuit_reason == "http_412"
+    assert any(event.phase == "deep_read" and event.status == "skipped" for event in result.events)
+
+
+class EnoughDiscoverer:
+    def __init__(self):
+        self.calls = 0
+
+    def discover(self, query, *, budget):
+        self.calls += 1
+        return [
+            DiscoveryCandidate(
+                canonical_id=f"BV{index}",
+                url=f"https://www.bilibili.com/video/BV{index}",
+                provenance=["bilibili_search_page"],
+                matched_queries=[query.text],
+            )
+            for index in range(5)
+        ]
+
+
+def test_candidate_target_stops_followup_query_and_checkpoints_each_deep_read():
+    discoverer = EnoughDiscoverer()
+    reader = Reader()
+    store = Store()
+    pipeline = V1DiscoveryPipeline(
+        planner=Planner(candidate_target=5),
+        discoverer=discoverer,
+        ranker=Ranker(),
+        reader=reader,
+        store=store,
+    )
+
+    result = pipeline.run(intent(), budget=NetworkBudget())
+
+    assert result.status == "success"
+    assert discoverer.calls == 1
+    assert reader.calls == 2
+    assert store.evidence_checkpoints == 2
+    assert any(event.code == "candidate_target_reached" for event in result.events)
+
+
+class FirstCandidateFailsReader(Reader):
+    def read(self, candidate, *, budget, include_comments, retention):
+        if candidate.canonical_id == "BV0":
+            raise CandidateReadError("invalid_candidate")
+        return super().read(
+            candidate,
+            budget=budget,
+            include_comments=include_comments,
+            retention=retention,
+        )
+
+
+def test_one_bad_candidate_does_not_discard_following_checkpoints():
+    reader = FirstCandidateFailsReader()
+    store = Store()
+    pipeline = V1DiscoveryPipeline(
+        planner=Planner(candidate_target=5),
+        discoverer=EnoughDiscoverer(),
+        ranker=Ranker(),
+        reader=reader,
+        store=store,
+    )
+
+    result = pipeline.run(intent(), budget=NetworkBudget())
+
+    assert result.status == "partial_success"
+    assert len(result.evidence) == 1
+    assert store.evidence_checkpoints == 1
+    assert any(event.code == "invalid_candidate" for event in result.events)
+
+
+class Extractor:
+    def extract(self, evidence):
+        return [
+            ResourceRecord(
+                locator="https://github.com/acme/board",
+                repository_root="https://github.com/acme/board",
+                host="github.com",
+                kind=ResourceKind.REPOSITORY,
+            )
+        ]
+
+
+class Verifier:
+    def verify(self, resource, *, budget, scope):
+        budget.consume_external()
+        verified = resource.model_copy(deep=True)
+        verified.access_status = ResourceAccessStatus.ACCESSIBLE
+        verified.license_status = ResourceLicenseStatus.VERIFIED
+        verified.license_name = "MIT"
+        return verified
+
+
+def test_pipeline_checkpoints_extracted_and_verified_resources():
+    store = Store()
+    pipeline = V1DiscoveryPipeline(
+        planner=Planner(candidate_target=5),
+        discoverer=EnoughDiscoverer(),
+        ranker=Ranker(),
+        reader=Reader(),
+        store=store,
+        resource_extractor=Extractor(),
+        resource_verifier=Verifier(),
+    )
+
+    result = pipeline.run(intent(), budget=NetworkBudget())
+
+    assert result.status == "success"
+    assert len(result.resources) == 1
+    assert result.resources[0].license_name == "MIT"
+    assert store.resource_checkpoints == 2
+
+
+def test_resource_check_can_be_declined_without_losing_links():
+    store = Store()
+    verifier = Verifier()
+    request = intent().model_copy(
+        update={"verification_scope": VerificationScope.NONE}
+    )
+    pipeline = V1DiscoveryPipeline(
+        planner=Planner(candidate_target=5),
+        discoverer=EnoughDiscoverer(),
+        ranker=Ranker(),
+        reader=Reader(),
+        store=store,
+        resource_extractor=Extractor(),
+        resource_verifier=verifier,
+    )
+    budget = NetworkBudget()
+
+    result = pipeline.run(request, budget=budget)
+
+    assert len(result.resources) == 1
+    assert result.resources[0].locator == "https://github.com/acme/board"
+    assert result.resources[0].license_status == ResourceLicenseStatus.NO_EVIDENCE
+    assert budget.external_requests_used == 0
+    assert any(event.code == "resource_verification_disabled" for event in result.events)
+
+
+class ManyResourcesExtractor:
+    def extract(self, evidence):
+        return [
+            ResourceRecord(
+                locator=f"https://github.com/acme/board-{index}",
+                repository_root=f"https://github.com/acme/board-{index}",
+                host="github.com",
+                kind=ResourceKind.REPOSITORY,
+            )
+            for index in range(8)
+        ]
+
+
+def test_inspiration_mode_core_verifies_subset_and_retains_all_leads():
+    request = intent().model_copy(
+        update={"resource_search_style": ResourceSearchStyle.INSPIRATION}
+    )
+    pipeline = V1DiscoveryPipeline(
+        planner=Planner(candidate_target=5),
+        discoverer=EnoughDiscoverer(),
+        ranker=Ranker(),
+        reader=Reader(),
+        store=Store(),
+        resource_extractor=ManyResourcesExtractor(),
+        resource_verifier=Verifier(),
+    )
+    budget = NetworkBudget()
+
+    result = pipeline.run(request, budget=budget)
+
+    assert len(result.resources) == 8
+    assert budget.external_requests_used == 5
+    assert sum(item.license_name == "MIT" for item in result.resources) == 5
+    assert any(event.code == "inspiration_mode_core_subset" for event in result.events)

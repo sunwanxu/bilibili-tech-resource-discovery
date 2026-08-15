@@ -23,7 +23,14 @@ from .discovery import (
 from .models import DiscoveryEvent, DiscoveryReport
 from .source import DataSourceError, YtDlpDataSource, normalize_bvid, select_representative_parts
 from .storage import FileStorage
-from .web_discovery import FirecrawlClient, FirecrawlError, discover_with_firecrawl
+from .web_discovery import (
+    FirecrawlClient,
+    FirecrawlError,
+    PublicIndexClient,
+    PublicIndexError,
+    discover_with_firecrawl,
+    discover_with_public_index,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,16 +112,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     discover.add_argument(
         "--web-search",
-        choices=["auto", "off", "firecrawl"],
+        choices=["auto", "off", "public", "firecrawl"],
         default="auto",
-        help="optional public-web provider (default: use Firecrawl when configured)",
+        help=(
+            "public-web provider (default: Firecrawl when configured, otherwise "
+            "the built-in no-key public index)"
+        ),
     )
     discover.add_argument(
         "--bilibili-search",
         choices=["auto", "on", "off"],
-        default="off",
+        default="auto",
         help=(
-            "Bilibili internal candidate search (default: off; use on only for a bounded diagnostic)"
+            "Bilibili internal candidate search (default: auto; at most three discovery queries)"
         ),
     )
     discover.add_argument(
@@ -191,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
             seed_resource_urls = list(args.seed_resource_urls or [])
             public_web_events: list[DiscoveryEvent] = []
             public_web_limitations: list[str] = []
+            firecrawl_succeeded = False
             cached_videos, cached_resources = storage.load_discovery_seeds(
                 args.requirement,
                 max_age_hours=settings.cache_ttl_hours,
@@ -215,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
                     "FIRECRAWL_API_KEY is required for --web-search firecrawl"
                 )
             if (
-                args.web_search != "off"
+                args.web_search in {"auto", "firecrawl"}
                 and settings.firecrawl_api_key
                 and (not cache_sufficient or args.web_search == "firecrawl")
             ):
@@ -244,6 +255,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     seed_video_urls.extend(public_web.video_urls)
                     seed_resource_urls.extend(public_web.resource_urls)
+                    firecrawl_succeeded = public_web.result_count > 0
                     public_web_events.append(DiscoveryEvent(
                         phase="public_web_search",
                         status=("partial_success" if public_web.failures else "success"),
@@ -271,9 +283,65 @@ def main(argv: list[str] | None = None) -> int:
                     if not args.summary_json:
                         print(
                             "Firecrawl public-web discovery was unavailable; "
-                            "continuing with existing sources.",
+                            "trying the built-in public index.",
                             flush=True,
                         )
+            use_public_index = (
+                args.web_search == "public"
+                or (
+                    args.web_search == "auto"
+                    and not cache_sufficient
+                    and not firecrawl_succeeded
+                )
+            )
+            if use_public_index:
+                if not args.summary_json:
+                    print(
+                        "Searching public indexes for videos and open projects "
+                        "(no API key required)...",
+                        flush=True,
+                    )
+                try:
+                    web_progress = (
+                        (lambda message: print(message, file=sys.stderr, flush=True))
+                        if args.summary_json
+                        else lambda message: print(message, flush=True)
+                    )
+                    public_web = discover_with_public_index(
+                        PublicIndexClient(
+                            timeout_seconds=settings.firecrawl_timeout_seconds,
+                        ),
+                        args.requirement,
+                        per_query=settings.firecrawl_search_limit,
+                        mode=discovery_mode,
+                        progress=web_progress,
+                    )
+                    seed_video_urls.extend(public_web.video_urls)
+                    seed_resource_urls.extend(public_web.resource_urls)
+                    public_web_events.append(DiscoveryEvent(
+                        phase="public_web_search",
+                        status=("partial_success" if public_web.failures else "success"),
+                        detail=(
+                            f"Built-in public index returned {public_web.result_count} results, "
+                            f"{len(public_web.video_urls)} Bilibili candidates, and "
+                            f"{len(public_web.resource_urls)} direct resources"
+                        ),
+                    ))
+                    if public_web.failures:
+                        public_web_limitations.append(
+                            "Some keyless public-index queries failed; successful results "
+                            "were retained."
+                        )
+                except PublicIndexError:
+                    public_web_events.append(DiscoveryEvent(
+                        phase="public_web_search",
+                        status="failed",
+                        detail="public_index",
+                    ))
+                    public_web_limitations.append(
+                        "The built-in public index was unavailable; cached and explicit "
+                        "candidates were still retained."
+                    )
             cooldown = storage.active_cooldown()
             if cooldown:
                 queries = (
@@ -345,6 +413,11 @@ def main(argv: list[str] | None = None) -> int:
                         if args.summary_json
                         else lambda message: print(message, flush=True)
                     ),
+                    checkpoint=lambda videos: storage.save_discovery_checkpoint(
+                        args.requirement,
+                        discovery_mode,
+                        videos,
+                    ),
                 )
             report.events = [*public_web_events, *report.events]
             report.evidence_limitations.extend(public_web_limitations)
@@ -360,6 +433,16 @@ def main(argv: list[str] | None = None) -> int:
                     "videos_inspected": len(report.videos),
                     "resources_found": len(report.resources),
                     "candidate_urls": [item.webpage_url for item in report.candidates],
+                    "candidate_results": [
+                        {
+                            "id": item.source_id,
+                            "title": item.title,
+                            "url": item.webpage_url,
+                            "matched_queries": item.matched_queries,
+                            "discovery_score": item.discovery_score,
+                        }
+                        for item in report.candidates
+                    ],
                     "resource_urls": [item.locator for item in report.resources],
                     "json_path": str(json_path),
                     "report_path": str(report_path),
