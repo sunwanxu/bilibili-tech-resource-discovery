@@ -48,9 +48,10 @@ class FakeContext:
 
 
 class FakeSession:
-    def __init__(self, profile_dir, *, visible):
+    def __init__(self, profile_dir, *, visible, allow_ephemeral_fallback):
         self.profile_dir = profile_dir
         self.visible = visible
+        self.allow_ephemeral_fallback = allow_ephemeral_fallback
         self.context = FakeContext()
 
     def __enter__(self):

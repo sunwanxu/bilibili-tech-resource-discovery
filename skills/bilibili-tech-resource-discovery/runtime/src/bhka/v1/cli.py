@@ -156,6 +156,19 @@ def run_discover(args: argparse.Namespace) -> int:
                 ),
             )
             outcome = pipeline.run(intent, budget=budget)
+            if session.using_ephemeral_profile:
+                outcome.events.insert(
+                    0,
+                    RunEvent(
+                        phase="session",
+                        status="recovered",
+                        code="ephemeral_profile_fallback",
+                        detail=(
+                            "The persistent project profile was busy, so this search used a "
+                            "temporary isolated Edge profile."
+                        ),
+                    ),
+                )
     except SearchSessionError as exc:
         outcome = RunOutcome(
             status="failed",

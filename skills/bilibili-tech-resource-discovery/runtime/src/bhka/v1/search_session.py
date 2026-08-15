@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Protocol, Self
 from urllib.parse import urlencode
 
@@ -41,6 +42,7 @@ class ManagedEdgeSearchSession:
         visible: bool = True,
         timeout_seconds: int = 30,
         scroll_rounds: int = 2,
+        allow_ephemeral_fallback: bool = True,
     ):
         if timeout_seconds < 5:
             raise ValueError("timeout_seconds must be at least 5")
@@ -50,26 +52,43 @@ class ManagedEdgeSearchSession:
         self.visible = visible
         self.timeout_ms = timeout_seconds * 1000
         self.scroll_rounds = scroll_rounds
+        self.allow_ephemeral_fallback = allow_ephemeral_fallback
         self._playwright: Playwright | None = None
         self._context: BrowserContext | None = None
+        self._temporary_profile: TemporaryDirectory[str] | None = None
 
     def __enter__(self) -> Self:
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         try:
             self._playwright = sync_playwright().start()
-            self._context = self._playwright.chromium.launch_persistent_context(
-                str(self.profile_dir),
-                channel="msedge",
-                headless=not self.visible,
-                viewport={"width": 1280, "height": 900},
-                locale="zh-CN",
-            )
+            try:
+                self._context = self._launch(self.profile_dir)
+            except PlaywrightError:
+                if not self.allow_ephemeral_fallback:
+                    raise
+                self._temporary_profile = TemporaryDirectory(prefix="bhka-v1-search-")
+                self._context = self._launch(Path(self._temporary_profile.name))
         except PlaywrightError as exc:
             self.close()
             raise SearchSessionError(
                 "The project-owned Microsoft Edge session could not be started."
             ) from exc
         return self
+
+    def _launch(self, profile_dir: Path) -> BrowserContext:
+        if self._playwright is None:
+            raise SearchSessionError("Playwright is not available")
+        return self._playwright.chromium.launch_persistent_context(
+            str(profile_dir),
+            channel="msedge",
+            headless=not self.visible,
+            viewport={"width": 1280, "height": 900},
+            locale="zh-CN",
+        )
+
+    @property
+    def using_ephemeral_profile(self) -> bool:
+        return self._temporary_profile is not None
 
     def __exit__(self, *_args: object) -> None:
         self.close()
@@ -93,6 +112,9 @@ class ManagedEdgeSearchSession:
             except PlaywrightError:
                 pass
             self._playwright = None
+        if self._temporary_profile is not None:
+            self._temporary_profile.cleanup()
+            self._temporary_profile = None
 
     def search(self, query: str) -> SearchPageSnapshot:
         normalized = " ".join(query.split())

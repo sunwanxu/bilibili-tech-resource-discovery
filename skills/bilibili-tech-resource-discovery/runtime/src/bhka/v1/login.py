@@ -59,7 +59,11 @@ def interactive_v1_login(
     report("正在打开项目专属 Edge 窗口，请在窗口内正常登录 B 站。")
     report("登录信息只保存在本机，不会显示、上传或写入报告。")
     try:
-        with ManagedEdgeSearchSession(profile_dir, visible=True) as session:
+        with ManagedEdgeSearchSession(
+            profile_dir,
+            visible=True,
+            allow_ephemeral_fallback=False,
+        ) as session:
             context = session.context
             page = context.pages[0] if context.pages else context.new_page()
             page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=30_000)

@@ -1,5 +1,7 @@
 import pytest
+from playwright.sync_api import Error as PlaywrightError
 
+from bhka.v1 import search_session as search_session_module
 from bhka.v1.contracts import NetworkBudget, QuerySpec
 from bhka.v1.pipeline import PlatformCircuitBreak
 from bhka.v1.search_session import (
@@ -62,3 +64,34 @@ def test_managed_session_requires_context_and_rejects_bad_settings(tmp_path):
     with pytest.raises(SearchSessionError):
         session.search("test")
 
+
+def test_managed_search_falls_back_when_persistent_profile_is_locked(tmp_path, monkeypatch):
+    contexts = []
+
+    class FakeContext:
+        def close(self):
+            return None
+
+    class FakeChromium:
+        def launch_persistent_context(self, profile, **_kwargs):
+            contexts.append(profile)
+            if len(contexts) == 1:
+                raise PlaywrightError("profile is in use")
+            return FakeContext()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+        def stop(self):
+            return None
+
+    class FakeStarter:
+        def start(self):
+            return FakePlaywright()
+
+    monkeypatch.setattr(search_session_module, "sync_playwright", lambda: FakeStarter())
+
+    with ManagedEdgeSearchSession(tmp_path) as session:
+        assert session.using_ephemeral_profile
+        assert len(contexts) == 2
+        assert contexts[0] == str(tmp_path.resolve())
