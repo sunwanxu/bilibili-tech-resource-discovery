@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Protocol
 
 from .contracts import (
     DiscoveryCandidate,
@@ -10,60 +9,26 @@ from .contracts import (
     EvidenceRecord,
     IntentProfile,
     NetworkBudget,
-    QueryPlan,
     ResourceSearchStyle,
     RunEvent,
     RunOutcome,
     VerificationScope,
+)
+from .errors import (
+    CandidateReadError,
+    DiscoveryFailure,
+    PlatformCircuitBreak,
+    ResourceVerificationFailure,
 )
 from .ports import (
     CandidateDiscoverer,
     CandidateRanker,
     CheckpointStore,
     EvidenceReader,
+    QueryPlanner,
     ResourceExtractor,
     ResourceVerifier,
 )
-
-
-class PlatformCircuitBreak(RuntimeError):
-    """A deterministic upstream signal after which no new Bilibili request is allowed."""
-
-    def __init__(self, code: str, detail: str | None = None):
-        super().__init__(detail or code)
-        self.code = code
-        self.detail = detail
-
-
-class CandidateReadError(RuntimeError):
-    """A bounded failure for one candidate that must not abort the full run."""
-
-    def __init__(self, code: str, detail: str | None = None):
-        super().__init__(detail or code)
-        self.code = code
-        self.detail = detail
-
-
-class DiscoveryFailure(RuntimeError):
-    """A bounded failure of one discovery adapter."""
-
-    def __init__(self, code: str, detail: str | None = None):
-        super().__init__(detail or code)
-        self.code = code
-        self.detail = detail
-
-
-class ResourceVerificationFailure(RuntimeError):
-    """A bounded failure for one external resource."""
-
-    def __init__(self, code: str, detail: str | None = None):
-        super().__init__(detail or code)
-        self.code = code
-        self.detail = detail
-
-
-class QueryPlanner(Protocol):
-    def plan(self, intent: IntentProfile) -> QueryPlan: ...
 
 
 def merge_candidates(

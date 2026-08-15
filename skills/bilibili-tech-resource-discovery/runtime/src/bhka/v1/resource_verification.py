@@ -15,7 +15,7 @@ from .contracts import (
     ResourceRecord,
     VerificationScope,
 )
-from .pipeline import ResourceVerificationFailure
+from .errors import ResourceVerificationFailure
 
 
 @dataclass(frozen=True)
