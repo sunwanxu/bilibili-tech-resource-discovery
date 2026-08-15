@@ -9,6 +9,7 @@ from .contracts import (
     EvidenceRecord,
     IntentProfile,
     NetworkBudget,
+    ResourceRecord,
     ResourceSearchStyle,
     RunEvent,
     RunOutcome,
@@ -53,6 +54,22 @@ def merge_candidates(
         if not current.summary and candidate.summary:
             current.summary = candidate.summary
     return list(merged.values())
+
+
+def merge_cached_verification(
+    current: ResourceRecord,
+    cached: ResourceRecord,
+) -> ResourceRecord:
+    """Keep current discovery context while reusing cached verification evidence."""
+
+    merged = current.model_copy(deep=True)
+    merged.access_status = cached.access_status
+    merged.license_status = cached.license_status
+    merged.license_name = cached.license_name
+    merged.license_scope = cached.license_scope
+    merged.artifacts = list(cached.artifacts)
+    merged.verification_notes = list(cached.verification_notes)
+    return merged
 
 
 @dataclass
@@ -179,91 +196,105 @@ class V1DiscoveryPipeline:
                 )
             )
 
-        if circuit_during_discovery:
-            events.append(
-                RunEvent(
-                    phase="deep_read",
-                    status="skipped",
-                    code="circuit_open",
-                    detail="No new Bilibili requests are permitted in this run",
-                )
+        for candidate in selected[: plan.deep_read_target]:
+            include_comments = intent.mode in {
+                DiscoveryMode.RESOURCE,
+                DiscoveryMode.BOTH,
+            }
+            cached_records = self.store.load_evidence(
+                candidate.canonical_id,
+                include_comments=include_comments,
+                retention=intent.retention,
             )
-        else:
-            for candidate in selected[: plan.deep_read_target]:
-                if not budget.allow_bilibili():
-                    events.append(
-                        RunEvent(
-                            phase="deep_read",
-                            status="skipped",
-                            code=(
-                                budget.circuit_reason
-                                or (
-                                    "bilibili_disabled"
-                                    if budget.bilibili_requests_limit == 0
-                                    else "request_budget_exhausted"
-                                )
-                            ),
-                            detail=candidate.canonical_id,
-                        )
-                    )
-                    break
-                try:
-                    budget.consume_bilibili()
-                    records = list(
-                        self.reader.read(
-                            candidate,
-                            budget=budget,
-                            include_comments=intent.mode in {
-                                DiscoveryMode.RESOURCE,
-                                DiscoveryMode.BOTH,
-                            },
-                            retention=intent.retention,
-                        )
-                    )
-                except PlatformCircuitBreak as exc:
-                    budget.open_circuit(exc.code)
-                    events.append(
-                        RunEvent(
-                            phase="deep_read",
-                            status="circuit_open",
-                            code=exc.code,
-                            detail=exc.detail or candidate.canonical_id,
-                            request_kind="bilibili",
-                        )
-                    )
-                    self.store.record_event("deep_read", "circuit_open", exc.code)
-                    break
-                except CandidateReadError as exc:
-                    events.append(
-                        RunEvent(
-                            phase="deep_read",
-                            status="failed",
-                            code=exc.code,
-                            detail=exc.detail or candidate.canonical_id,
-                            request_kind="bilibili",
-                        )
-                    )
-                    self.store.record_event("deep_read", "failed", exc.code)
-                    continue
-                evidence.extend(records)
-                self.store.save_evidence(records)
+            if cached_records is not None:
+                evidence.extend(cached_records)
                 events.append(
                     RunEvent(
                         phase="deep_read",
-                        status="checkpointed",
+                        status="cache_hit",
+                        detail=(
+                            f"{candidate.canonical_id}: {len(cached_records)} evidence records"
+                        ),
+                    )
+                )
+                continue
+            if not budget.allow_bilibili():
+                events.append(
+                    RunEvent(
+                        phase="deep_read",
+                        status="skipped",
+                        code=(
+                            budget.circuit_reason
+                            or (
+                                "bilibili_disabled"
+                                if budget.bilibili_requests_limit == 0
+                                else "request_budget_exhausted"
+                            )
+                        ),
                         detail=candidate.canonical_id,
+                    )
+                )
+                if not circuit_during_discovery:
+                    break
+                continue
+            try:
+                budget.consume_bilibili()
+                records = list(
+                    self.reader.read(
+                        candidate,
+                        budget=budget,
+                        include_comments=include_comments,
+                        retention=intent.retention,
+                    )
+                )
+            except PlatformCircuitBreak as exc:
+                budget.open_circuit(exc.code)
+                events.append(
+                    RunEvent(
+                        phase="deep_read",
+                        status="circuit_open",
+                        code=exc.code,
+                        detail=exc.detail or candidate.canonical_id,
                         request_kind="bilibili",
                     )
                 )
+                self.store.record_event("deep_read", "circuit_open", exc.code)
+                break
+            except CandidateReadError as exc:
+                events.append(
+                    RunEvent(
+                        phase="deep_read",
+                        status="failed",
+                        code=exc.code,
+                        detail=exc.detail or candidate.canonical_id,
+                        request_kind="bilibili",
+                    )
+                )
+                self.store.record_event("deep_read", "failed", exc.code)
+                continue
+            evidence.extend(records)
+            self.store.save_evidence_snapshot(
+                candidate.canonical_id,
+                records,
+                include_comments=include_comments,
+                retention=intent.retention,
+            )
+            events.append(
+                RunEvent(
+                    phase="deep_read",
+                    status="checkpointed",
+                    detail=candidate.canonical_id,
+                    request_kind="bilibili",
+                )
+            )
 
         resources = (
             self.resource_extractor.extract(evidence)
             if self.resource_extractor is not None
             else []
         )
-        if resources:
-            self.store.save_resources(resources)
         if resources and intent.verification_scope == VerificationScope.NONE:
+            self.store.save_resources(resources)
             events.append(
                 RunEvent(
                     phase="resource_verification",
@@ -273,6 +304,8 @@ class V1DiscoveryPipeline:
                     request_kind="external",
                 )
             )
+        elif resources and self.resource_verifier is None:
+            self.store.save_resources(resources)
         elif self.resource_verifier is not None:
             verification_limit = len(resources)
             if (
@@ -294,6 +327,21 @@ class V1DiscoveryPipeline:
                         )
                     )
             for index, resource in enumerate(resources[:verification_limit]):
+                cached_resource = self.store.load_resource(
+                    resource.locator,
+                    scope=intent.verification_scope,
+                )
+                if cached_resource is not None:
+                    resources[index] = merge_cached_verification(resource, cached_resource)
+                    events.append(
+                        RunEvent(
+                            phase="resource_verification",
+                            status="cache_hit",
+                            detail=resource.locator,
+                        )
+                    )
+                    continue
+                self.store.save_resources([resource])
                 try:
                     verified = self.resource_verifier.verify(
                         resource,
@@ -313,7 +361,10 @@ class V1DiscoveryPipeline:
                     self.store.record_event("resource_verification", "failed", exc.code)
                     continue
                 resources[index] = verified
-                self.store.save_resources([verified])
+                self.store.save_resources(
+                    [verified],
+                    verification_scope=intent.verification_scope,
+                )
                 events.append(
                     RunEvent(
                         phase="resource_verification",
@@ -322,6 +373,8 @@ class V1DiscoveryPipeline:
                         request_kind="external",
                     )
                 )
+            if verification_limit < len(resources):
+                self.store.save_resources(resources[verification_limit:])
 
         has_failures = any(event.status in {"failed", "circuit_open"} for event in events)
         has_outputs = bool(candidates or resources)

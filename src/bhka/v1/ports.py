@@ -59,6 +59,21 @@ class EvidenceReader(Protocol):
 class CheckpointStore(Protocol):
     def load_candidates(self, intent: IntentProfile) -> list[DiscoveryCandidate]: ...
 
+    def load_evidence(
+        self,
+        subject_id: str,
+        *,
+        include_comments: bool,
+        retention: RetentionPolicy,
+    ) -> list[EvidenceRecord] | None: ...
+
+    def load_resource(
+        self,
+        locator: str,
+        *,
+        scope: VerificationScope,
+    ) -> ResourceRecord | None: ...
+
     def save_candidates(
         self,
         intent: IntentProfile,
@@ -67,7 +82,21 @@ class CheckpointStore(Protocol):
 
     def save_evidence(self, evidence: Iterable[EvidenceRecord]) -> None: ...
 
-    def save_resources(self, resources: Iterable[ResourceRecord]) -> None: ...
+    def save_evidence_snapshot(
+        self,
+        subject_id: str,
+        evidence: Iterable[EvidenceRecord],
+        *,
+        include_comments: bool,
+        retention: RetentionPolicy,
+    ) -> None: ...
+
+    def save_resources(
+        self,
+        resources: Iterable[ResourceRecord],
+        *,
+        verification_scope: VerificationScope = VerificationScope.NONE,
+    ) -> None: ...
 
     def record_event(self, phase: str, status: str, code: str | None = None) -> None: ...
 
