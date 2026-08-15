@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from bhka.v1.cli import _seed_candidates, build_parser, infer_mode, main
 from bhka.v1.contracts import DiscoveryMode
@@ -66,6 +67,8 @@ def test_external_resource_only_run_uses_no_bilibili_or_external_requests(tmp_pa
     assert payload["counts"]["resources"] == 1
     assert payload["budget"]["bilibili_requests_used"] == 0
     assert payload["budget"]["external_requests_used"] == 0
+    report = json.loads(Path(payload["paths"]["json"]).read_text(encoding="utf-8"))
+    assert any(event["code"] == "bilibili_disabled" for event in report["events"])
 
 
 def test_mixed_need_exits_with_machine_readable_clarification(capsys):

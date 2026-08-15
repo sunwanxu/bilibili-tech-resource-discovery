@@ -146,7 +146,14 @@ class V1DiscoveryPipeline:
                     RunEvent(
                         phase="discovery",
                         status="skipped",
-                        code=budget.circuit_reason or "request_budget_exhausted",
+                        code=(
+                            budget.circuit_reason
+                            or (
+                                "bilibili_disabled"
+                                if budget.bilibili_requests_limit == 0
+                                else "request_budget_exhausted"
+                            )
+                        ),
                         detail=query.text,
                     )
                 )
@@ -221,7 +228,14 @@ class V1DiscoveryPipeline:
                         RunEvent(
                             phase="deep_read",
                             status="skipped",
-                            code=budget.circuit_reason or "request_budget_exhausted",
+                            code=(
+                                budget.circuit_reason
+                                or (
+                                    "bilibili_disabled"
+                                    if budget.bilibili_requests_limit == 0
+                                    else "request_budget_exhausted"
+                                )
+                            ),
                             detail=candidate.canonical_id,
                         )
                     )
