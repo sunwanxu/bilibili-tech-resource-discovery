@@ -18,10 +18,16 @@ def test_parser_accepts_plain_natural_language_request():
     assert args.breadth == "standard"
 
 
+def test_parser_exposes_v1_private_login_command():
+    args = build_parser().parse_args(["login", "--timeout-minutes", "7"])
+
+    assert args.command == "login"
+    assert args.timeout_minutes == 7
+
+
 def test_mixed_need_exits_with_machine_readable_clarification(capsys):
     exit_code = main(["discover", "我想学习 PCB 并找开源代码"])
     payload = json.loads(capsys.readouterr().out)
 
     assert exit_code == 2
     assert payload["error"]["code"] == "mode_clarification_required"
-

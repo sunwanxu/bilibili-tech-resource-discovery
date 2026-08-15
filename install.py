@@ -79,6 +79,8 @@ def install(
         install_command.extend(["--state-from", str(root)])
     if not login:
         install_command.append("--no-login")
+    else:
+        install_command.append("--login")
     if run(install_command):
         print("Skill installation failed. Keep the error above for the developer AI.")
         return 1
@@ -99,7 +101,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Install the Bilibili discovery runtime, Skill, and managed login.",
     )
-    parser.add_argument(
+    login_group = parser.add_mutually_exclusive_group()
+    login_group.add_argument(
+        "--login",
+        action="store_true",
+        help="open the private Edge login window after installation",
+    )
+    login_group.add_argument(
         "--no-login",
         action="store_true",
         help="install locally without opening Edge; intended for CI or offline checks",
@@ -116,9 +124,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.login:
+        login = True
+    elif args.no_login:
+        login = False
+    elif sys.stdin.isatty():
+        answer = input(
+            "是否现在打开独立 Edge 窗口登录 B 站？登录后字幕和评论覆盖更好。 [Y/n] "
+        ).strip().casefold()
+        login = answer not in {"n", "no", "否"}
+    else:
+        login = False
+        print("No interactive consent was available; Bilibili login was skipped.")
     return install(
         Path(__file__).resolve().parent,
-        login=not args.no_login,
+        login=login,
         agent=args.agent,
         home=args.home,
     )

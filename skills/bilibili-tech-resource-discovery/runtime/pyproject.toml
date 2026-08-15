@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 bhka = "bhka.cli:main"
+bhka-v1 = "bhka.v1.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/bhka"]

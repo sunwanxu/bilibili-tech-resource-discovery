@@ -285,9 +285,9 @@ def test_bundled_runtime_matches_primary_source_tree() -> None:
     source = project / "src" / "bhka"
 
     assert {
-        path.name: path.read_bytes() for path in bundled.glob("*.py")
+        path.relative_to(bundled): path.read_bytes() for path in bundled.rglob("*.py")
     } == {
-        path.name: path.read_bytes() for path in source.glob("*.py")
+        path.relative_to(source): path.read_bytes() for path in source.rglob("*.py")
     }
 
 
@@ -317,13 +317,17 @@ def test_portable_installer_verifies_the_exact_bundled_runtime_version(
     bhka = runtime / "bhka"
     python.touch()
     bhka.touch()
-    monkeypatch.setattr(portable, "runtime_paths", lambda value: (python, bhka))
+    bhka_v1 = runtime / "bhka-v1"
+    bhka_v1.touch()
+    monkeypatch.setattr(portable, "runtime_paths", lambda value: (python, bhka, bhka_v1))
     calls = []
 
     def fake_run(command, **kwargs):
         calls.append(command)
         if command == [str(bhka), "--version"]:
             return SimpleNamespace(returncode=0, stdout="bhka 0.4.0\n")
+        if command == [str(bhka_v1), "--help"]:
+            return SimpleNamespace(returncode=0, stdout="usage: bhka-v1\n")
         return SimpleNamespace(returncode=0, stdout="")
 
     monkeypatch.setattr(portable.subprocess, "run", fake_run)
@@ -337,6 +341,42 @@ def test_portable_installer_verifies_the_exact_bundled_runtime_version(
 
     assert [str(bhka), "--version"] in calls
     assert "Runtime verified: bhka 0.4.0" in capsys.readouterr().out
+
+
+def test_portable_installer_uses_v1_login_after_consent(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "installed-skill"
+    runtime = target / "runtime"
+    runtime.mkdir(parents=True)
+    (runtime / "pyproject.toml").write_text(
+        '[project]\nname = "bilibili-hidden-knowledge-agent"\nversion = "0.4.0"\n',
+        encoding="utf-8",
+    )
+    python = runtime / "python"
+    bhka = runtime / "bhka"
+    bhka_v1 = runtime / "bhka-v1"
+    for path in (python, bhka, bhka_v1):
+        path.touch()
+    monkeypatch.setattr(portable, "runtime_paths", lambda _runtime: (python, bhka, bhka_v1))
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        if command == [str(python), "--version"]:
+            return SimpleNamespace(returncode=0, stdout="Python 3.13\n", stderr="")
+        if command == [str(bhka), "--version"]:
+            return SimpleNamespace(returncode=0, stdout="bhka 0.4.0\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(portable.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        portable,
+        "_pip_install",
+        lambda _python, _runtime: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    portable.install_runtime(target, login=True)
+
+    assert [str(bhka_v1), "login", "--project-root", str(runtime)] in calls
 
 
 def test_portable_runtime_install_is_non_editable(tmp_path: Path, monkeypatch) -> None:
@@ -393,7 +433,9 @@ def test_portable_installer_rebuilds_an_unhealthy_runtime(tmp_path: Path, monkey
     bhka = environment / "bhka"
     python.touch()
     bhka.touch()
-    monkeypatch.setattr(portable, "runtime_paths", lambda value: (python, bhka))
+    bhka_v1 = environment / "bhka-v1"
+    bhka_v1.touch()
+    monkeypatch.setattr(portable, "runtime_paths", lambda value: (python, bhka, bhka_v1))
     rebuilt = []
 
     class FakeBuilder:
@@ -411,6 +453,8 @@ def test_portable_installer_rebuilds_an_unhealthy_runtime(tmp_path: Path, monkey
             return SimpleNamespace(returncode=1, stdout="")
         if command == [str(bhka), "--version"]:
             return SimpleNamespace(returncode=0, stdout="bhka 0.4.0\n")
+        if command == [str(bhka_v1), "--help"]:
+            return SimpleNamespace(returncode=0, stdout="usage: bhka-v1\n")
         return SimpleNamespace(returncode=0, stdout="")
 
     monkeypatch.setattr(portable.venv, "EnvBuilder", FakeBuilder)

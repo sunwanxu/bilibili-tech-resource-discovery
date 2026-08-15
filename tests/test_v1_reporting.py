@@ -3,6 +3,7 @@ import json
 from bhka.v1.contracts import (
     DiscoveryCandidate,
     DiscoveryMode,
+    EvidenceRecord,
     IntentProfile,
     NetworkBudget,
     QueryPlan,
@@ -36,6 +37,16 @@ def outcome(status="success"):
         budget=NetworkBudget(),
         candidates=[candidate],
         selected_candidates=[candidate],
+        evidence=[
+            EvidenceRecord(
+                evidence_id="e1",
+                subject_id="BV1",
+                source_kind="subtitle",
+                source_url=candidate.url,
+                text="字" * 1_000,
+                attributes={"language": "zh-CN", "request_headers": {"Cookie": "secret"}},
+            )
+        ],
     )
 
 
@@ -45,6 +56,8 @@ def test_writer_outputs_utf8_json_markdown_and_latest_pointer(tmp_path):
     payload = json.loads(paths.json_path.read_text(encoding="utf-8"))
     markdown = paths.markdown_path.read_text(encoding="utf-8")
     assert payload["intent"]["original_request"] == "学习 KiCad PCB"
+    assert len(payload["evidence"][0]["text"]) == 800
+    assert "request_headers" not in payload["evidence"][0]["attributes"]
     assert "精选视频" in markdown
     assert paths.latest_json_path == tmp_path / "latest.json"
 
@@ -58,4 +71,3 @@ def test_failed_run_does_not_replace_latest_success(tmp_path):
 
     assert json.loads((tmp_path / "latest.json").read_text(encoding="utf-8"))["run_id"] == success.run_id
     assert paths.latest_json_path == tmp_path / "latest-failed.json"
-
