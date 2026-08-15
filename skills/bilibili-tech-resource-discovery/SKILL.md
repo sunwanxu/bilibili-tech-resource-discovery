@@ -81,13 +81,20 @@ duplicated words and fixed task-specific vocabularies.
 
 Use the host's ordinary public web search when available to discover indexed Bilibili video pages and
 direct GitHub, Gitee, OSHWHub/JLC, GitCode, Codeberg, documentation, and shared-file links. Feed precise
-queries to the v1 engine with repeated `--query`. Do not make the user collect URLs.
+queries to the v1 engine with repeated `--query`, discovered Bilibili pages with repeated
+`--candidate-url`, and direct project links with repeated `--resource-url`. Do not make the user
+collect URLs. Numeric AV ids, `av...`, BV ids, and full Bilibili video URLs are accepted consistently.
 
 Run the engine with one natural-language request:
 
 ```text
 <bhka-v1> discover "<user request>" --mode <learning-or-resource> --breadth standard --verification core --query "<precise query>" --project-root <runtime>
 ```
+
+When Bilibili search is disabled or a run-wide circuit is already open, use
+`--no-bilibili-search` with host-discovered `--candidate-url` and `--resource-url` inputs. The engine
+must retain and optionally verify those resources without opening Edge or consuming any Bilibili
+request budget.
 
 The runtime searches the normal Bilibili web page in a visible, project-owned Edge context. It does
 not call an undocumented bulk-search API. Candidate discovery is broad; description, subtitle, and

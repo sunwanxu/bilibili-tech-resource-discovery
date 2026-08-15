@@ -7,12 +7,14 @@ from pathlib import Path
 
 from bhka.browser_login import BrowserLoginError
 from bhka.config import Settings
-from bhka.source import YtDlpDataSource
+from bhka.source import YtDlpDataSource, normalize_video_id
 
 from .cache import SQLiteCheckpointStore
 from .contracts import (
     Breadth,
+    DiscoveryCandidate,
     DiscoveryMode,
+    EvidenceRecord,
     IntentProfile,
     NetworkBudget,
     RunEvent,
@@ -63,9 +65,16 @@ def build_parser() -> argparse.ArgumentParser:
     discover.add_argument("--breadth", choices=[item.value for item in Breadth], default="standard")
     discover.add_argument("--verification", choices=[item.value for item in VerificationScope], default="core")
     discover.add_argument("--query", action="append", default=[])
+    discover.add_argument("--candidate-url", action="append", default=[])
+    discover.add_argument("--resource-url", action="append", default=[])
     discover.add_argument("--deep-read", type=int, choices=range(16))
     discover.add_argument("--bilibili-budget", type=int, default=10)
     discover.add_argument("--external-budget", type=int, default=12)
+    discover.add_argument(
+        "--bilibili-search",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     discover.add_argument("--visible-browser", action=argparse.BooleanOptionalAction, default=True)
     discover.add_argument("--project-root", type=Path, default=Path.cwd())
     login = subparsers.add_parser("login", help="Open the private Edge login used by v1")
@@ -110,6 +119,41 @@ def _intent_from_args(args: argparse.Namespace) -> IntentProfile | None:
     )
 
 
+def _seed_candidates(values: list[str]) -> list[DiscoveryCandidate]:
+    candidates = []
+    for value in values:
+        canonical_id = normalize_video_id(value)
+        candidates.append(
+            DiscoveryCandidate(
+                canonical_id=canonical_id,
+                url=f"https://www.bilibili.com/video/{canonical_id}",
+                provenance=["host_public_web"],
+            )
+        )
+    return candidates
+
+
+def _seed_resource_evidence(values: list[str]) -> list[EvidenceRecord]:
+    records = []
+    for index, value in enumerate(dict.fromkeys(item.strip() for item in values if item.strip())):
+        records.append(
+            EvidenceRecord(
+                evidence_id=f"host-resource-{index}",
+                subject_id="host-public-web",
+                source_kind="external_resource",
+                source_url=value,
+                text=value,
+                attributes={"provenance": "host_public_web"},
+            )
+        )
+    return records
+
+
+class _NoopDiscoverer:
+    def discover(self, query, *, budget):
+        raise AssertionError("Bilibili discovery is disabled and must not be called")
+
+
 def run_discover(args: argparse.Namespace) -> int:
     intent = _intent_from_args(args)
     if intent is None:
@@ -134,41 +178,67 @@ def run_discover(args: argparse.Namespace) -> int:
     )
     plan = planner.plan(intent)
     budget = NetworkBudget(
-        bilibili_requests_limit=args.bilibili_budget,
+        bilibili_requests_limit=args.bilibili_budget if args.bilibili_search else 0,
         external_requests_limit=args.external_budget,
     )
     store = SQLiteCheckpointStore(root / "data" / "v1" / "cache.sqlite3")
     writer = ReportWriter(root / "reports" / "v1")
     try:
-        with ManagedEdgeSearchSession(
-            root / ".auth" / "v1-edge-profile",
-            visible=args.visible_browser,
-        ) as session:
-            pipeline = V1DiscoveryPipeline(
-                planner=planner,
-                discoverer=BilibiliSearchPageDiscoverer(session),
-                ranker=DeterministicCandidateRanker(),
-                reader=YtDlpEvidenceReader(YtDlpDataSource(settings)),
-                store=store,
-                resource_extractor=EvidenceResourceExtractor(),
-                resource_verifier=ResourceVerifierRouter(
-                    github=GitHubResourceVerifier(token=os.getenv("GITHUB_TOKEN"))
-                ),
+        seed_candidates = _seed_candidates(args.candidate_url)
+    except ValueError as exc:
+        print(
+            json.dumps(
+                {"ok": False, "error": {"code": "invalid_candidate_url", "message": str(exc)}},
+                ensure_ascii=False,
             )
-            outcome = pipeline.run(intent, budget=budget)
-            if session.using_ephemeral_profile:
-                outcome.events.insert(
-                    0,
-                    RunEvent(
-                        phase="session",
-                        status="recovered",
-                        code="ephemeral_profile_fallback",
-                        detail=(
-                            "The persistent project profile was busy, so this search used a "
-                            "temporary isolated Edge profile."
-                        ),
-                    ),
+        )
+        return 2
+    seed_evidence = _seed_resource_evidence(args.resource_url)
+    def make_pipeline(discoverer):
+        return V1DiscoveryPipeline(
+            planner=planner,
+            discoverer=discoverer,
+            ranker=DeterministicCandidateRanker(),
+            reader=YtDlpEvidenceReader(YtDlpDataSource(settings)),
+            store=store,
+            resource_extractor=EvidenceResourceExtractor(),
+            resource_verifier=ResourceVerifierRouter(
+                github=GitHubResourceVerifier(token=os.getenv("GITHUB_TOKEN"))
+            ),
+        )
+
+    try:
+        if not args.bilibili_search:
+            outcome = make_pipeline(_NoopDiscoverer()).run(
+                intent,
+                budget=budget,
+                initial_candidates=seed_candidates,
+                initial_evidence=seed_evidence,
+            )
+        else:
+            with ManagedEdgeSearchSession(
+                root / ".auth" / "v1-edge-profile",
+                visible=args.visible_browser,
+            ) as session:
+                outcome = make_pipeline(BilibiliSearchPageDiscoverer(session)).run(
+                    intent,
+                    budget=budget,
+                    initial_candidates=seed_candidates,
+                    initial_evidence=seed_evidence,
                 )
+                if session.using_ephemeral_profile:
+                    outcome.events.insert(
+                        0,
+                        RunEvent(
+                            phase="session",
+                            status="recovered",
+                            code="ephemeral_profile_fallback",
+                            detail=(
+                                "The persistent project profile was busy, so this search used a "
+                                "temporary isolated Edge profile."
+                            ),
+                        ),
+                    )
     except SearchSessionError as exc:
         outcome = RunOutcome(
             status="failed",

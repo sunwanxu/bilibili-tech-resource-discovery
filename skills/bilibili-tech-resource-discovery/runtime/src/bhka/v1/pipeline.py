@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -97,16 +98,34 @@ class V1DiscoveryPipeline:
     resource_extractor: ResourceExtractor | None = None
     resource_verifier: ResourceVerifier | None = None
 
-    def run(self, intent: IntentProfile, *, budget: NetworkBudget) -> RunOutcome:
+    def run(
+        self,
+        intent: IntentProfile,
+        *,
+        budget: NetworkBudget,
+        initial_candidates: Iterable[DiscoveryCandidate] = (),
+        initial_evidence: Iterable[EvidenceRecord] = (),
+    ) -> RunOutcome:
         plan = self.planner.plan(intent)
         events: list[RunEvent] = []
-        candidates = self.store.load_candidates(intent)
-        if candidates:
+        cached_candidates = self.store.load_candidates(intent)
+        seeded_candidates = list(initial_candidates)
+        candidates = merge_candidates(cached_candidates, seeded_candidates)
+        if cached_candidates:
             events.append(
                 RunEvent(
                     phase="discovery",
                     status="cache_hit",
-                    detail=f"Loaded {len(candidates)} cached candidates",
+                    detail=f"Loaded {len(cached_candidates)} cached candidates",
+                )
+            )
+        if seeded_candidates:
+            self.store.save_candidates(intent, candidates)
+            events.append(
+                RunEvent(
+                    phase="candidate_seed",
+                    status="checkpointed",
+                    detail=f"Loaded {len(seeded_candidates)} host-discovered video candidates",
                 )
             )
 
@@ -174,7 +193,17 @@ class V1DiscoveryPipeline:
 
         ranked = self.ranker.rank(intent, candidates)
         selected = ranked[: plan.selected_target]
-        evidence: list[EvidenceRecord] = []
+        evidence = list(initial_evidence)
+        if evidence:
+            self.store.save_evidence(evidence)
+            events.append(
+                RunEvent(
+                    phase="evidence_seed",
+                    status="checkpointed",
+                    detail=f"Loaded {len(evidence)} host-discovered external leads",
+                    request_kind="external",
+                )
+            )
 
         if circuit_during_discovery:
             events.append(
@@ -292,9 +321,10 @@ class V1DiscoveryPipeline:
                 )
 
         has_failures = any(event.status in {"failed", "circuit_open"} for event in events)
-        if candidates and (budget.circuit_open or has_failures):
+        has_outputs = bool(candidates or resources)
+        if has_outputs and (budget.circuit_open or has_failures):
             status = "partial_success"
-        elif not candidates:
+        elif not has_outputs:
             status = "failed"
         else:
             status = "success"

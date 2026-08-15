@@ -69,7 +69,7 @@ class QueryPlan(BaseModel):
 class NetworkBudget(BaseModel):
     """A run-wide budget. Every Bilibili-facing adapter consumes from the same object."""
 
-    bilibili_requests_limit: int = Field(default=12, ge=1, le=100)
+    bilibili_requests_limit: int = Field(default=12, ge=0, le=100)
     external_requests_limit: int = Field(default=20, ge=0, le=200)
     bilibili_requests_used: int = Field(default=0, ge=0)
     external_requests_used: int = Field(default=0, ge=0)
