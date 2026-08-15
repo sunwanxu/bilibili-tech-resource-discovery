@@ -8,6 +8,10 @@ from bhka.v1.contracts import (
     NetworkBudget,
     QueryPlan,
     QuerySpec,
+    ResourceAccessStatus,
+    ResourceKind,
+    ResourceLicenseStatus,
+    ResourceRecord,
 )
 from bhka.v1.pipeline import CandidateReadError, PlatformCircuitBreak, V1DiscoveryPipeline
 
@@ -46,6 +50,7 @@ class Store:
     cached: list[DiscoveryCandidate] = field(default_factory=list)
     candidate_checkpoints: int = 0
     evidence_checkpoints: int = 0
+    resource_checkpoints: int = 0
     recorded_events: list[tuple[str, str, str | None]] = field(default_factory=list)
 
     def load_candidates(self, _intent):
@@ -57,6 +62,9 @@ class Store:
 
     def save_evidence(self, evidence):
         self.evidence_checkpoints += 1
+
+    def save_resources(self, resources):
+        self.resource_checkpoints += 1
 
     def record_event(self, phase, status, code=None):
         self.recorded_events.append((phase, status, code))
@@ -183,3 +191,45 @@ def test_one_bad_candidate_does_not_discard_following_checkpoints():
     assert len(result.evidence) == 1
     assert store.evidence_checkpoints == 1
     assert any(event.code == "invalid_candidate" for event in result.events)
+
+
+class Extractor:
+    def extract(self, evidence):
+        return [
+            ResourceRecord(
+                locator="https://github.com/acme/board",
+                repository_root="https://github.com/acme/board",
+                host="github.com",
+                kind=ResourceKind.REPOSITORY,
+            )
+        ]
+
+
+class Verifier:
+    def verify(self, resource, *, budget, scope):
+        budget.consume_external()
+        verified = resource.model_copy(deep=True)
+        verified.access_status = ResourceAccessStatus.ACCESSIBLE
+        verified.license_status = ResourceLicenseStatus.VERIFIED
+        verified.license_name = "MIT"
+        return verified
+
+
+def test_pipeline_checkpoints_extracted_and_verified_resources():
+    store = Store()
+    pipeline = V1DiscoveryPipeline(
+        planner=Planner(candidate_target=5),
+        discoverer=EnoughDiscoverer(),
+        ranker=Ranker(),
+        reader=Reader(),
+        store=store,
+        resource_extractor=Extractor(),
+        resource_verifier=Verifier(),
+    )
+
+    result = pipeline.run(intent(), budget=NetworkBudget())
+
+    assert result.status == "success"
+    assert len(result.resources) == 1
+    assert result.resources[0].license_name == "MIT"
+    assert store.resource_checkpoints == 2

@@ -7,6 +7,8 @@ from bhka.v1.contracts import (
     DiscoveryMode,
     EvidenceRecord,
     IntentProfile,
+    ResourceKind,
+    ResourceRecord,
 )
 
 
@@ -64,3 +66,22 @@ def test_minimal_evidence_cache_truncates_text_and_drops_sensitive_attributes(tm
     assert len(text) == 100
     assert json.loads(attributes) == {"language": "zh"}
 
+
+def test_resource_checkpoint_is_valid_json_and_updates_in_place(tmp_path):
+    path = tmp_path / "cache.sqlite3"
+    store = SQLiteCheckpointStore(path)
+    resource = ResourceRecord(
+        locator="https://github.com/acme/board",
+        repository_root="https://github.com/acme/board",
+        host="github.com",
+        kind=ResourceKind.REPOSITORY,
+    )
+    store.save_resources([resource])
+    resource.license_name = "MIT"
+    store.save_resources([resource])
+
+    with sqlite3.connect(path) as connection:
+        rows = connection.execute("SELECT payload_json FROM resource").fetchall()
+
+    assert len(rows) == 1
+    assert json.loads(rows[0][0])["license_name"] == "MIT"

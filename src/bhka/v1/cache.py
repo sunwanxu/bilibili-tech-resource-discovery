@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .contracts import DiscoveryCandidate, EvidenceRecord, IntentProfile
+from .contracts import DiscoveryCandidate, EvidenceRecord, IntentProfile, ResourceRecord
 
 _SENSITIVE_ATTRIBUTE_PARTS = {
     "authorization",
@@ -111,6 +111,11 @@ class SQLiteCheckpointStore:
                     phase TEXT NOT NULL,
                     status TEXT NOT NULL,
                     code TEXT
+                );
+                CREATE TABLE IF NOT EXISTS resource (
+                    locator TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 );
                 """
             )
@@ -216,3 +221,11 @@ class SQLiteCheckpointStore:
                 (datetime.now(UTC).isoformat(), phase, status, code),
             )
 
+    def save_resources(self, resources: Iterable[ResourceRecord]) -> None:
+        now = datetime.now(UTC).isoformat()
+        with self._connect() as connection:
+            for resource in resources:
+                connection.execute(
+                    "INSERT OR REPLACE INTO resource VALUES (?, ?, ?)",
+                    (resource.locator, resource.model_dump_json(), now),
+                )

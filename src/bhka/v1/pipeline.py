@@ -12,7 +12,14 @@ from .contracts import (
     RunEvent,
     RunOutcome,
 )
-from .ports import CandidateDiscoverer, CandidateRanker, CheckpointStore, EvidenceReader
+from .ports import (
+    CandidateDiscoverer,
+    CandidateRanker,
+    CheckpointStore,
+    EvidenceReader,
+    ResourceExtractor,
+    ResourceVerifier,
+)
 
 
 class PlatformCircuitBreak(RuntimeError):
@@ -26,6 +33,15 @@ class PlatformCircuitBreak(RuntimeError):
 
 class CandidateReadError(RuntimeError):
     """A bounded failure for one candidate that must not abort the full run."""
+
+    def __init__(self, code: str, detail: str | None = None):
+        super().__init__(detail or code)
+        self.code = code
+        self.detail = detail
+
+
+class ResourceVerificationFailure(RuntimeError):
+    """A bounded failure for one external resource."""
 
     def __init__(self, code: str, detail: str | None = None):
         super().__init__(detail or code)
@@ -68,6 +84,8 @@ class V1DiscoveryPipeline:
     ranker: CandidateRanker
     reader: EvidenceReader
     store: CheckpointStore
+    resource_extractor: ResourceExtractor | None = None
+    resource_verifier: ResourceVerifier | None = None
 
     def run(self, intent: IntentProfile, *, budget: NetworkBudget) -> RunOutcome:
         plan = self.planner.plan(intent)
@@ -203,6 +221,44 @@ class V1DiscoveryPipeline:
                     )
                 )
 
+        resources = (
+            self.resource_extractor.extract(evidence)
+            if self.resource_extractor is not None
+            else []
+        )
+        if resources:
+            self.store.save_resources(resources)
+        if self.resource_verifier is not None:
+            for index, resource in enumerate(resources):
+                try:
+                    verified = self.resource_verifier.verify(
+                        resource,
+                        budget=budget,
+                        scope=intent.verification_scope,
+                    )
+                except ResourceVerificationFailure as exc:
+                    events.append(
+                        RunEvent(
+                            phase="resource_verification",
+                            status="failed",
+                            code=exc.code,
+                            detail=exc.detail or resource.locator,
+                            request_kind="external",
+                        )
+                    )
+                    self.store.record_event("resource_verification", "failed", exc.code)
+                    continue
+                resources[index] = verified
+                self.store.save_resources([verified])
+                events.append(
+                    RunEvent(
+                        phase="resource_verification",
+                        status="checkpointed",
+                        detail=verified.locator,
+                        request_kind="external",
+                    )
+                )
+
         has_failures = any(event.status in {"failed", "circuit_open"} for event in events)
         if candidates and (budget.circuit_open or has_failures):
             status = "partial_success"
@@ -218,6 +274,7 @@ class V1DiscoveryPipeline:
             budget=budget,
             candidates=selected,
             evidence=evidence,
+            resources=resources,
             events=events,
             limitations=(
                 ["Bilibili circuit opened; only pre-circuit evidence was retained"]

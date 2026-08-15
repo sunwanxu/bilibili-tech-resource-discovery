@@ -84,6 +84,14 @@ class NetworkBudget(BaseModel):
             raise RuntimeError("Bilibili request budget is unavailable")
         self.bilibili_requests_used += 1
 
+    def allow_external(self) -> bool:
+        return self.external_requests_used < self.external_requests_limit
+
+    def consume_external(self) -> None:
+        if not self.allow_external():
+            raise RuntimeError("External request budget is unavailable")
+        self.external_requests_used += 1
+
     def open_circuit(self, reason: str) -> None:
         self.circuit_open = True
         self.circuit_reason = reason
@@ -122,6 +130,56 @@ class EvidenceRecord(BaseModel):
     cached: bool = False
 
 
+class ResourceKind(StrEnum):
+    REPOSITORY = "repository"
+    PCB_PROJECT = "pcb_project"
+    SHARED_FILE = "shared_file"
+    DOCUMENT = "document"
+    COMMUNITY = "community"
+    UNKNOWN = "unknown"
+
+
+class ResourceAccessStatus(StrEnum):
+    ACCESSIBLE = "accessible"
+    LOGIN_OR_MANUAL = "login_or_manual_access"
+    DEAD = "dead_link"
+    BLOCKED = "blocked"
+    UNKNOWN = "unknown"
+
+
+class ResourceLicenseStatus(StrEnum):
+    VERIFIED = "verified_license"
+    PUBLIC_NO_LICENSE = "public_source_no_license"
+    CLAIMED_NO_LINK = "claimed_open_no_link"
+    AUTHORIZATION_UNCLEAR = "downloadable_authorization_unclear"
+    LOGIN_OR_MANUAL = "login_or_manual_access"
+    DEAD = "dead_link"
+    NO_EVIDENCE = "no_open_source_evidence"
+
+
+class ResourceOrigin(BaseModel):
+    evidence_id: str
+    source_kind: str
+    source_url: str
+    context: str = ""
+
+
+class ResourceRecord(BaseModel):
+    locator: str
+    repository_root: str | None = None
+    host: str
+    kind: ResourceKind = ResourceKind.UNKNOWN
+    origins: list[ResourceOrigin] = Field(default_factory=list)
+    access_status: ResourceAccessStatus = ResourceAccessStatus.UNKNOWN
+    license_status: ResourceLicenseStatus = ResourceLicenseStatus.NO_EVIDENCE
+    license_name: str | None = None
+    license_scope: str | None = None
+    artifacts: list[str] = Field(default_factory=list)
+    verification_notes: list[str] = Field(default_factory=list)
+    value_score: float = Field(default=0, ge=0, le=10)
+    value_reasons: list[str] = Field(default_factory=list)
+
+
 class RunEvent(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     phase: str
@@ -139,6 +197,6 @@ class RunOutcome(BaseModel):
     budget: NetworkBudget
     candidates: list[DiscoveryCandidate] = Field(default_factory=list)
     evidence: list[EvidenceRecord] = Field(default_factory=list)
+    resources: list[ResourceRecord] = Field(default_factory=list)
     events: list[RunEvent] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
-

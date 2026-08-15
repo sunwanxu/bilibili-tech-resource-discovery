@@ -9,7 +9,9 @@ from .contracts import (
     IntentProfile,
     NetworkBudget,
     QuerySpec,
+    ResourceRecord,
     RetentionPolicy,
+    VerificationScope,
 )
 
 
@@ -58,4 +60,20 @@ class CheckpointStore(Protocol):
 
     def save_evidence(self, evidence: Iterable[EvidenceRecord]) -> None: ...
 
+    def save_resources(self, resources: Iterable[ResourceRecord]) -> None: ...
+
     def record_event(self, phase: str, status: str, code: str | None = None) -> None: ...
+
+
+class ResourceExtractor(Protocol):
+    def extract(self, evidence: Iterable[EvidenceRecord]) -> list[ResourceRecord]: ...
+
+
+class ResourceVerifier(Protocol):
+    def verify(
+        self,
+        resource: ResourceRecord,
+        *,
+        budget: NetworkBudget,
+        scope: VerificationScope,
+    ) -> ResourceRecord: ...

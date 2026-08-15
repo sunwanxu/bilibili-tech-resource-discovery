@@ -49,6 +49,15 @@
 - v1 第一版采用无第三方依赖的可解释词项得分与 MMR 风格软多样性排序。RapidFuzz 可作为已安装时的
   可选加速器；真实对照测试证明有收益后再提升为默认组件。
 
+### GitHub REST 与其他资源平台
+
+- GitHub 仓库验证使用官方 REST `repos` 元数据：核心验证通常一次请求即可确认仓库状态和 GitHub
+  识别的 SPDX 许可证；全量验证才额外读取仓库根目录，判断 README、源码、原理图和 PCB 文件。
+- GitHub Token 是可选项；没有 Token 时仍可使用公开额度，耗尽后保留链接并标记待验证。
+- Gitee、GitCode 和 Codeberg 第一版只验证公开可达性，不推测许可证；后续为各平台增加独立官方 API
+  适配器。
+- 立创开源广场、网盘和社区群链接会保留，但“可打开/可下载”只代表访问证据，不能提升为明确开源。
+
 ### `JefferyHcool/BiliNote`
 
 - 地址：https://github.com/JefferyHcool/BiliNote
