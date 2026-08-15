@@ -14,6 +14,7 @@ from bhka.discovery import (
     classify_open_source,
     expand_queries,
     extract_resources,
+    infer_discovery_mode,
     infer_repository_artifacts,
     inspect_external_resources,
     merge_resource_pool,
@@ -320,7 +321,7 @@ def test_cli_exposes_runtime_version(capsys):
         cli_module.main(["--version"])
 
     assert exit_info.value.code == 0
-    assert capsys.readouterr().out.strip() == "bhka 0.6.0"
+    assert capsys.readouterr().out.strip() == "bhka 0.7.0"
 
 
 def test_discover_defaults_favor_broad_web_candidates_without_forcing_internal_search():
@@ -329,6 +330,7 @@ def test_discover_defaults_favor_broad_web_candidates_without_forcing_internal_s
     assert args.max_candidates == 80
     assert args.deep == 8
     assert args.bilibili_search == "off"
+    assert args.mode == "auto"
 
 
 def test_discover_accepts_explicit_internal_search_disable():
@@ -358,8 +360,29 @@ def test_discover_summary_json_is_clean_utf8_machine_output(tmp_path: Path, caps
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 1
     assert payload["run_status"] == "failed"
+    assert payload["discovery_mode"] == "resources"
     assert payload["candidate_urls"] == []
     assert "中文缓存测试" in payload["json_path"]
+
+
+def test_discover_auto_selects_light_learning_mode(tmp_path: Path, capsys):
+    exit_code = cli_module.main([
+        "discover",
+        "我想学习一下AI短剧，我该看哪些视频",
+        "--web-search",
+        "off",
+        "--bilibili-search",
+        "off",
+        "--summary-json",
+        "--project-root",
+        str(tmp_path),
+    ])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 1
+    assert payload["discovery_mode"] == "learning"
+    assert payload["deep_inspection_limit"] == 4
 
 
 def test_summary_json_never_instantiates_optional_ai_analyzer(
@@ -471,6 +494,19 @@ def test_expand_queries_preserves_k_problem_and_vehicle_anchor():
 
 
 @pytest.mark.parametrize(
+    ("requirement", "expected"),
+    [
+        ("我想学习一下AI短剧，我该看哪些视频", "learning"),
+        ("完全不会画PCB，找适合零基础的教程视频", "learning"),
+        ("2026 电赛 H题 开源代码和设计方案", "resources"),
+        ("帮我找ESP32工程文件、原理图和GitHub仓库", "resources"),
+    ],
+)
+def test_discovery_mode_is_inferred_from_result_goal(requirement: str, expected: str):
+    assert infer_discovery_mode(requirement) == expected
+
+
+@pytest.mark.parametrize(
     ("requirement", "expected_terms"),
     [
         ("ESP32-C3 MQTT 智能家居 开源代码", ["ESP32-C3", "MQTT", "智能家居"]),
@@ -562,6 +598,20 @@ def test_direct_public_resources_are_preserved_independently(monkeypatch):
     assert len(resources) == 1
     assert resources[0].kind == "code_repository"
     assert resources[0].origin == "public_web_direct"
+
+
+def test_learning_mode_can_preserve_resource_leads_without_network_verification(monkeypatch):
+    def fail_if_called(_resources):
+        raise AssertionError("learning mode must not verify repositories")
+
+    monkeypatch.setattr(discovery_module, "inspect_external_resources", fail_if_called)
+
+    resources = prepare_direct_resources(
+        ["https://github.com/example/course-assets"],
+        verify=False,
+    )
+
+    assert resources[0].inspection_status == "not_inspected"
 
 
 def test_resource_extraction_preserves_origin_and_access_boundary():
@@ -1195,6 +1245,28 @@ def test_explicit_candidate_urls_are_deep_inspected_even_with_sparse_preview_met
         event.status == "retained_explicit_candidate"
         for event in report.events
     ) >= 2
+
+
+def test_learning_pipeline_skips_external_repository_verification(monkeypatch):
+    source = ExplicitCandidateSource()
+
+    def fail_if_called(_resources):
+        raise AssertionError("learning mode must not verify repositories")
+
+    monkeypatch.setattr(discovery_module, "inspect_external_resources", fail_if_called)
+    report = DiscoveryPipeline(source).run(
+        "我想学习STM32，请推荐教程视频",
+        max_candidates=20,
+        deep_limit=1,
+        include_comments=False,
+        seed_video_urls=["https://www.bilibili.com/video/BV1234567890"],
+        seed_resource_urls=["https://github.com/example/course-assets"],
+        discovery_mode="learning",
+    )
+
+    assert report.discovery_mode == "learning"
+    assert len(report.videos) == 1
+    assert report.resources[0].inspection_status == "not_inspected"
 
 
 def test_small_internal_candidate_pool_is_ranked_without_strict_filter_fallback():

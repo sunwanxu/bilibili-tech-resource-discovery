@@ -330,6 +330,7 @@ def render_discovery_markdown(report: DiscoveryReport) -> str:
 
 - 运行 ID：{report.run_id}
 - 运行状态：{report.run_status}
+- 结果模式：{report.discovery_mode}
 - 成功查询：{report.successful_queries}
 - 失败查询：{report.failed_queries}
 - 跳过查询：{report.skipped_queries}

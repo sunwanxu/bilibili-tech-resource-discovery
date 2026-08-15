@@ -1,6 +1,6 @@
 ---
 name: bilibili-tech-resource-discovery
-description: Discover and prioritize usable open-source technical projects from a natural-language need by combining public web indexes, Bilibili evidence, and open-project platforms; verify code, hardware artifacts, access, and license scope; then connect supporting videos, descriptions, bounded comments, and subtitles. Use when a user wants source code, PCB projects, competition solutions, build references, technical tutorials, implementation ideas, or hidden resources mentioned around Bilibili videos. Also use when setting up or troubleshooting the local Bilibili login needed by this workflow.
+description: Find either high-quality learning videos or usable open-source technical projects from a natural-language need by combining public web indexes, Bilibili evidence, and open-project platforms. Automatically use a fast course-first path for tutorials and learning plans, or a deeper resource-first path that verifies code, hardware artifacts, access, and license scope. Use when a user wants videos to learn a skill, source code, PCB projects, competition solutions, build references, implementation ideas, or hidden resources mentioned around Bilibili videos. Also use when setting up or troubleshooting the local Bilibili login needed by this workflow.
 ---
 
 # Bilibili Technical Resource Discovery
@@ -8,9 +8,10 @@ description: Discover and prioritize usable open-source technical projects from 
 Give the user a working result before optimizing optional features. Treat first-run onboarding as part
 of the task, not as homework for the user.
 
-Treat usable source code, hardware projects, and engineering files as the primary result. Treat
-Bilibili videos as discovery channels, explanations, and supporting evidence. Do not optimize for
-video count when the user's real goal is a reusable project.
+Make the user's requested result the primary result. For learning requests, prioritize good videos,
+course structure, suitability, and a practical viewing order. For build or reuse requests, prioritize
+usable source code, hardware projects, and engineering files; treat Bilibili videos as discovery
+channels, explanations, and supporting evidence.
 
 ## Locate the bundled runtime
 
@@ -25,7 +26,7 @@ the installer writes this pointer only when a running Windows agent has locked a
 - macOS/Linux: `<skill>/runtime/<environment>/bin/bhka`
 
 Treat that exact absolute executable path as `<bhka>`. Never invoke a bare `bhka` from `PATH`; it may
-resolve to an older installation. Confirm `<bhka> --version` reports `bhka 0.6.0` before a smoke test.
+resolve to an older installation. Confirm `<bhka> --version` reports `bhka 0.7.0` before a smoke test.
 Use `<skill>/runtime` whenever a command requests `--project-root`. During source development only,
 an explicitly supplied external `bilibili-hidden-knowledge-agent` repository may replace the bundled
 runtime.
@@ -76,12 +77,34 @@ Infer these fields from the conversation:
 Ask at most one concise question only when a missing answer would materially change the search.
 Otherwise state a reasonable assumption and proceed.
 
+Choose the result mode automatically; never ask the user to choose a mode or type a flag:
+
+- Use `learning` when the requested outcome is tutorials, courses, a viewing list, a learning path,
+  or instruction matched to the user's level. A technology name such as PCB does not by itself mean
+  the user wants project files.
+- Use `resources` when the requested outcome explicitly includes source code, repositories,
+  engineering files, datasets, model/workflow files, licenses, or a reusable implementation.
+- When both appear, use `resources` but still explain the best supporting videos.
+
 ## Run bounded discovery
 
 Interpret the request yourself before searching. The user supplies only the natural-language need;
 do not expose query counts, CLI flags, or candidate limits unless they ask for diagnostics.
 
-Use multi-source discovery for a normal run:
+For `learning`, use the fast course-first workflow:
+
+1. Use ordinary web search first with four to six precise `site:bilibili.com/video` queries. Find
+   15-30 candidates when available and retain titles, snippets, dates, course/episode structure, and
+   direct links from the search evidence.
+2. Rank for topic fit, appropriate difficulty, coherent progression, practical demonstrations, and
+   coverage of the requested subskills. Demote exaggerated marketing titles when the underlying
+   course evidence is weak.
+3. Return a concise viewing order quickly. Deep-inspect at most four decisive candidates when
+   descriptions, subtitles, or bounded comments would materially improve the recommendation.
+4. Do not inspect or verify external repositories merely because a course description contains a
+   link. Preserve such links as unverified leads and offer deeper verification only if the user asks.
+
+For `resources`, use multi-source discovery:
 
 1. Search GitHub, Gitee, OSHWHub/JLC Open Source, and relevant official project sites directly with
    four to six resource-oriented queries. Do not require a project to originate from a video.
@@ -101,11 +124,15 @@ as an optional coverage enhancement: never require a Firecrawl key for normal us
 in a command line or report, and continue with existing sources when the provider is unavailable.
 Use `--web-search off` for offline tests or when the user explicitly disables the provider.
 
-Example internal invocation:
+Example internal invocation for resource discovery:
 
 ```text
 <bhka> discover "<natural-language requirement>" --query "<precise topic>" --candidate-url "<Bilibili URL>" --resource-url "<repository URL>" --max-candidates 80 --deep 8 --comments --bilibili-search off --project-root <skill>/runtime
 ```
+
+For learning discovery, pass `--mode learning --deep 4 --no-comments`; for resource discovery pass
+`--mode resources`. The default `--mode auto` performs the same intent selection from the natural
+language requirement. These flags are host-AI implementation details, not user instructions.
 
 Keep `--bilibili-search off` for normal runs; this is the runtime default. Use `on` only for a
 deliberate, bounded internal-search diagnostic. Candidate breadth and deep inspection are separate:
@@ -125,10 +152,10 @@ When evidence mentions a distinctive project name without a URL, perform a preci
 for that name. Merge the same resource across channels and retain every evidence origin and
 supporting video.
 
-For a normal broad request, aim to present 10-20 useful resource links and 15-30 supporting or
-alternative video links when the evidence actually supports that many. Do not pad the answer with
-weakly related results to reach a quota. If fewer survive verification, return the smaller honest set
-and say which discovery channel was thin.
+For a broad resource request, aim to present 10-20 useful resource links and 15-30 supporting or
+alternative video links when the evidence supports that many. For a learning request, aim to present
+8-15 strong videos grouped into start here, focused practice, and advanced/reference material. Do not
+pad either result with weakly related items.
 
 Rank resources before videos. Prefer, in order: accessible projects with verified licenses and
 matching artifacts; accessible public source without verified licenses; platform projects whose
@@ -189,6 +216,10 @@ freeze.
 Use the generated JSON and Markdown as evidence, then have the AI synthesize a user-facing answer.
 Do not pretend to have watched the complete video. Distinguish metadata, description, comment,
 subtitle, repository, and human-review evidence.
+
+For a learning answer, lead with a three-to-five-item viewing path, then list alternatives by
+subskill and explain why each video fits the user's level. Do not lead with repository or license
+tables. For a resource answer, lead with usable projects and their verified artifact/license evidence.
 
 For a privacy-preserving single-video smoke test, use `<bhka> analyze <BV> --summary-json`; it emits
 counts and standardized warning/error codes without subtitle text, comment text, or account identity.

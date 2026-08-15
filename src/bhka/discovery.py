@@ -119,6 +119,34 @@ def extract_hard_anchors(requirement: str) -> list[str]:
     return list(dict.fromkeys(anchors))
 
 
+LEARNING_INTENT_TERMS = (
+    "学习", "教程", "课程", "视频", "怎么学", "如何学", "入门", "从零", "零基础",
+    "不会", "教我", "观看顺序", "学习路线", "适合新手",
+)
+RESOURCE_GOAL_TERMS = (
+    "开源", "源码", "源代码", "代码", "仓库", "github", "gitee", "gitcode",
+    "pcb", "原理图", "gerber", "bom", "固件", "工程文件", "项目资料", "数据集",
+    "模型文件", "工作流文件", "许可证", "license", "复现", "搭建", "制作参考",
+)
+STRONG_RESOURCE_GOAL_TERMS = (
+    "开源", "源码", "源代码", "代码", "仓库", "github", "gitee", "gitcode",
+    "gerber", "bom", "固件", "工程文件", "项目资料", "数据集", "模型文件",
+    "工作流文件", "许可证", "license",
+)
+
+
+def infer_discovery_mode(requirement: str) -> str:
+    """Choose the light learning path unless reusable artifacts are the explicit goal."""
+    normalized = " ".join(requirement.lower().split())
+    if any(term in normalized for term in STRONG_RESOURCE_GOAL_TERMS):
+        return "resources"
+    if any(term in normalized for term in LEARNING_INTENT_TERMS):
+        return "learning"
+    if any(term in normalized for term in RESOURCE_GOAL_TERMS):
+        return "resources"
+    return "resources"
+
+
 def expand_queries(requirement: str, limit: int = 8) -> list[str]:
     """Expand a natural-language need into a bounded, explainable query set."""
     base = " ".join(requirement.split()).strip()
@@ -189,7 +217,11 @@ def seed_video_results(urls: list[str], requirement: str) -> list[SearchResult]:
     return results
 
 
-def prepare_direct_resources(urls: list[str]) -> list[ExternalResource]:
+def prepare_direct_resources(
+    urls: list[str],
+    *,
+    verify: bool = True,
+) -> list[ExternalResource]:
     """Normalize and inspect public project links found independently of Bilibili."""
     resources: list[ExternalResource] = []
     seen: set[str] = set()
@@ -210,7 +242,8 @@ def prepare_direct_resources(urls: list[str]) -> list[ExternalResource]:
             license_status="unverified",
             origins=["public_web_direct"],
         ))
-    inspect_external_resources(resources)
+    if verify:
+        inspect_external_resources(resources)
     return resources
 
 
@@ -781,6 +814,7 @@ class DiscoveryPipeline:
         seed_video_urls: list[str] | None = None,
         seed_resource_urls: list[str] | None = None,
         bilibili_search: str = "off",
+        discovery_mode: str = "resources",
         progress: Callable[[str], None] | None = None,
     ) -> DiscoveryReport:
         started_at = datetime.now(UTC)
@@ -792,6 +826,8 @@ class DiscoveryPipeline:
             raise ValueError("deep_limit must be between 1 and 12")
         if bilibili_search not in {"auto", "on", "off"}:
             raise ValueError("bilibili_search must be auto, on, or off")
+        if discovery_mode not in {"learning", "resources"}:
+            raise ValueError("discovery_mode must be learning or resources")
         if planned_queries:
             queries = list(dict.fromkeys(
                 " ".join(query.split())
@@ -804,7 +840,11 @@ class DiscoveryPipeline:
             queries = expand_queries(requirement)
         per_query = min(20, max(5, math.ceil(max_candidates / len(queries)) + 2))
         hits = seed_video_results(seed_video_urls or [], requirement)
-        direct_resources = prepare_direct_resources(seed_resource_urls or [])
+        verify_resources = discovery_mode == "resources"
+        direct_resources = prepare_direct_resources(
+            seed_resource_urls or [],
+            verify=verify_resources,
+        )
         limitations: list[str] = []
         events: list[DiscoveryEvent] = []
         successful_queries = 0
@@ -857,6 +897,7 @@ class DiscoveryPipeline:
                     run_status=(
                         "partial_success" if seeded_candidates or direct_resources else "failed"
                     ),
+                    discovery_mode=discovery_mode,
                     requirement=requirement,
                     expanded_queries=queries,
                     candidates_found=len(seeded_candidates),
@@ -972,6 +1013,7 @@ class DiscoveryPipeline:
                 started_at=started_at,
                 completed_at=datetime.now(UTC),
                 run_status=run_status,
+                discovery_mode=discovery_mode,
                 requirement=requirement,
                 expanded_queries=queries,
                 candidates_found=len(candidates),
@@ -1047,6 +1089,7 @@ class DiscoveryPipeline:
                         started_at=started_at,
                         completed_at=datetime.now(UTC),
                         run_status="partial_success" if successful_queries else "failed",
+                        discovery_mode=discovery_mode,
                         requirement=requirement,
                         expanded_queries=queries,
                         candidates_found=len(candidates),
@@ -1107,7 +1150,8 @@ class DiscoveryPipeline:
                 limitations.append(f"Could not inspect {candidate.source_id}: {exc}")
                 continue
             resources = extract_resources(raw)
-            inspect_external_resources(resources)
+            if verify_resources:
+                inspect_external_resources(resources)
             open_status, open_reason = classify_open_source(raw, resources)
             fit_score, fit_reason = suitability(raw, requirement, resources)
             evidence_basis = ["metadata", "description"]
@@ -1141,19 +1185,23 @@ class DiscoveryPipeline:
                 status="success",
                 detail=candidate.source_id,
             ))
-        videos.sort(key=lambda item: (
-            -sum(
-                resource.kind in {"code_repository", "hardware_project"}
-                for resource in item.resources
-            ),
-            -item.suitability_score,
-            -item.discovery_score,
-        ))
+        if discovery_mode == "learning":
+            videos.sort(key=lambda item: (-item.suitability_score, -item.discovery_score))
+        else:
+            videos.sort(key=lambda item: (
+                -sum(
+                    resource.kind in {"code_repository", "hardware_project"}
+                    for resource in item.resources
+                ),
+                -item.suitability_score,
+                -item.discovery_score,
+            ))
         resource_pool = merge_resource_pool(
             direct_resources,
             *(video.resources for video in videos),
         )
-        inspect_external_resources(resource_pool)
+        if verify_resources:
+            inspect_external_resources(resource_pool)
         ranked_resources = rank_resources(resource_pool)
         if stop_reason == "http_412":
             run_status = "partial_success" if successful_queries or videos else "failed"
@@ -1161,6 +1209,7 @@ class DiscoveryPipeline:
             started_at=started_at,
             completed_at=datetime.now(UTC),
             run_status=run_status,
+            discovery_mode=discovery_mode,
             requirement=requirement,
             expanded_queries=queries,
             candidates_found=len(candidates),

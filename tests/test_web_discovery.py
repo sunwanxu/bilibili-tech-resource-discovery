@@ -10,6 +10,7 @@ from bhka.web_discovery import (
     FirecrawlError,
     build_firecrawl_queries,
     discover_with_firecrawl,
+    learning_search_focus,
 )
 
 
@@ -99,6 +100,20 @@ def test_firecrawl_queries_preserve_the_natural_language_requirement() -> None:
     assert len(queries) == 5
     assert all("2025 电赛 K题 小车" in query for query in queries)
     assert any("bilibili.com/video" in query for query in queries)
+
+
+def test_learning_queries_focus_on_courses_without_repository_searches() -> None:
+    queries = build_firecrawl_queries(
+        "我想学习一下AI短剧，我该看哪些视频",
+        mode="learning",
+    )
+
+    assert len(queries) == 5
+    assert all("site:bilibili.com/video" in query for query in queries)
+    assert not any("GitHub" in query or "Gitee" in query for query in queries)
+    assert any("从零 全流程" in query for query in queries)
+    assert all("我想" not in query and "我该" not in query for query in queries)
+    assert "AI短剧" in learning_search_focus("我想学习一下AI短剧，我该看哪些视频")
 
 
 def test_discovery_keeps_results_when_one_firecrawl_query_fails() -> None:

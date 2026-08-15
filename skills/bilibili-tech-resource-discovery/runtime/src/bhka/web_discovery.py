@@ -182,10 +182,41 @@ class FirecrawlClient:
         return hits
 
 
-def build_firecrawl_queries(requirement: str) -> list[str]:
+def learning_search_focus(requirement: str) -> str:
+    """Remove request phrasing while preserving the user's actual learning topic."""
+    cleaned = " ".join(requirement.split())
+    patterns = (
+        r"我(?:想|希望|要)(?:学习|了解|看)?(?:一下)?",
+        r"请(?:帮我)?",
+        r"帮我",
+        r"我该(?:看|学)?",
+        r"应该(?:看|学)?",
+        r"推荐(?:一些|几个)?",
+        r"有(?:哪些|什么)",
+        r"哪些",
+    )
+    for pattern in patterns:
+        cleaned = re.sub(pattern, " ", cleaned)
+    cleaned = re.sub(r"[，。！？、,;；?]+", " ", cleaned)
+    cleaned = " ".join(cleaned.split()).strip()
+    return " ".join(extract_query_anchors(cleaned)) or cleaned or requirement
+
+
+def build_firecrawl_queries(requirement: str, mode: str = "resources") -> list[str]:
     topic = " ".join(requirement.split())
     if not topic:
         raise ValueError("Requirement cannot be empty")
+    if mode == "learning":
+        focus = learning_search_focus(topic)
+        return [
+            f"site:bilibili.com/video {focus} 教程",
+            f"site:bilibili.com/video {focus} 从零 全流程",
+            f"site:bilibili.com/video {focus} 实战 案例",
+            f"site:bilibili.com/video {focus} 系列课程",
+            f"site:bilibili.com/video {focus} 经验 复盘",
+        ]
+    if mode != "resources":
+        raise ValueError("mode must be learning or resources")
     focus = " ".join(extract_query_anchors(topic)) or topic
     return [
         f"{focus} 开源代码 GitHub",
@@ -201,10 +232,14 @@ def discover_with_firecrawl(
     requirement: str,
     *,
     per_query: int = 8,
+    mode: str = "resources",
+    progress: Callable[[str], None] | None = None,
 ) -> PublicWebDiscovery:
-    discovery = PublicWebDiscovery(queries=build_firecrawl_queries(requirement))
+    discovery = PublicWebDiscovery(queries=build_firecrawl_queries(requirement, mode=mode))
     first_error: FirecrawlError | None = None
-    for query in discovery.queries:
+    for index, query in enumerate(discovery.queries, 1):
+        if progress:
+            progress(f"Public-web search {index}/{len(discovery.queries)}")
         try:
             hits = client.search(query, limit=per_query)
         except FirecrawlError as exc:

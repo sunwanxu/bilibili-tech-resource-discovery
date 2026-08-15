@@ -2,12 +2,12 @@
 
 # Bilibili Technical Resource Discovery
 
-### 从自然语言需求出发，找到真正可复用的开源技术资产
+### 一句话，自动找到值得学的视频或真正可复用的开源技术资产
 
-不止搜索视频。联合网页索引、B 站内容证据与开源项目平台，发现、验证并排序源码、PCB 工程、设计资料和技术路线。
+系统会先理解你最终想要的是“学习”还是“搭建”：学习时快速给出视频课程与观看顺序；搭建时联合网页索引、B 站内容证据与开源项目平台，验证并排序源码、PCB 工程、设计资料和技术路线。
 
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Version](https://img.shields.io/badge/version-0.6.0-6f42c1)](https://github.com/sunwanxu/bilibili-tech-resource-discovery)
+[![Version](https://img.shields.io/badge/version-0.7.0-6f42c1)](https://github.com/sunwanxu/bilibili-tech-resource-discovery)
 [![License: MIT](https://img.shields.io/badge/License-MIT-2ea44f.svg)](LICENSE)
 [![Agent Skill](https://img.shields.io/badge/Agent%20Skill-Codex%20%7C%20OpenCode-111827)](skills/bilibili-tech-resource-discovery)
 
@@ -35,6 +35,7 @@
 | 能力 | 说明 |
 |---|---|
 | 自然语言需求理解 | 从目标、技术栈、型号、平台、能力水平和资源偏好生成搜索计划 |
+| 自动双模式 | 想学习时走快速课程路径；要代码、工程文件或仓库时走深度资源路径 |
 | 多源候选发现 | 联合普通网页索引、B 站搜索、GitHub、Gitee、立创开源平台及公开项目站点 |
 | 可选 Firecrawl 增强 | 扩大公开网页覆盖并提取动态页面；未配置时自动使用原有发现流程 |
 | B 站证据读取 | 获取可用的视频元数据、简介、字幕和有上限的评论样本 |
@@ -125,7 +126,7 @@ Skill 自带运行源码和跨客户端安装器，不依赖仓库其他目录�
 安装器会验证实际执行的是 Skill 自带版本：
 
 ```text
-Runtime verified: bhka 0.6.0
+Runtime verified: bhka 0.7.0
 ```
 
 > [!TIP]

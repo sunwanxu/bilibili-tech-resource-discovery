@@ -14,6 +14,7 @@ from .discovery import (
     DiscoveryPipeline,
     aggregate_candidates,
     expand_queries,
+    infer_discovery_mode,
     merge_resource_pool,
     prepare_direct_resources,
     rank_resources,
@@ -76,6 +77,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="discover Bilibili videos and hidden resources from a natural-language need",
     )
     discover.add_argument("requirement")
+    discover.add_argument(
+        "--mode",
+        choices=["auto", "learning", "resources"],
+        default="auto",
+        help="result goal (default: infer learning videos or reusable resources)",
+    )
     discover.add_argument("--max-candidates", type=int, default=80)
     discover.add_argument("--deep", type=int, default=8, help="videos to inspect deeply (default: 8)")
     discover.add_argument(
@@ -170,8 +177,16 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Status: {auth.status}")
             return 0 if auth.status == "valid" else 2
         if args.command == "discover":
+            discovery_mode = (
+                infer_discovery_mode(args.requirement)
+                if args.mode == "auto"
+                else args.mode
+            )
+            deep_limit = min(args.deep, 4) if discovery_mode == "learning" else args.deep
+            include_comments = args.comments and discovery_mode == "resources"
             if not args.summary_json:
                 print(f"Starting discovery with bhka {__version__}.", flush=True)
+                print(f"Selected result mode: {discovery_mode}.", flush=True)
             seed_video_urls = list(args.seed_video_urls or [])
             seed_resource_urls = list(args.seed_resource_urls or [])
             public_web_events: list[DiscoveryEvent] = []
@@ -183,7 +198,8 @@ def main(argv: list[str] | None = None) -> int:
             seed_video_urls.extend(cached_videos)
             seed_resource_urls.extend(cached_resources)
             cache_sufficient = (
-                len(cached_videos) >= args.deep and len(cached_resources) >= 5
+                len(cached_videos) >= deep_limit
+                and (discovery_mode == "learning" or len(cached_resources) >= 5)
             )
             if cached_videos or cached_resources:
                 public_web_events.append(DiscoveryEvent(
@@ -214,10 +230,17 @@ def main(argv: list[str] | None = None) -> int:
                     timeout_seconds=settings.firecrawl_timeout_seconds,
                 )
                 try:
+                    web_progress = (
+                        (lambda message: print(message, file=sys.stderr, flush=True))
+                        if args.summary_json
+                        else lambda message: print(message, flush=True)
+                    )
                     public_web = discover_with_firecrawl(
                         firecrawl,
                         args.requirement,
                         per_query=settings.firecrawl_search_limit,
+                        mode=discovery_mode,
+                        progress=web_progress,
                     )
                     seed_video_urls.extend(public_web.video_urls)
                     seed_resource_urls.extend(public_web.resource_urls)
@@ -273,16 +296,20 @@ def main(argv: list[str] | None = None) -> int:
                 seeded_candidates = aggregate_candidates(seed_video_results(
                     seed_video_urls, args.requirement
                 ))[:args.max_candidates]
-                direct_resources = prepare_direct_resources(seed_resource_urls)
+                direct_resources = prepare_direct_resources(
+                    seed_resource_urls,
+                    verify=discovery_mode == "resources",
+                )
                 ranked_resources = rank_resources(merge_resource_pool(direct_resources))
                 report = DiscoveryReport(
                     run_status=(
                         "partial_success" if seeded_candidates or direct_resources else "failed"
                     ),
+                    discovery_mode=discovery_mode,
                     requirement=args.requirement,
                     expanded_queries=queries,
                     candidates_found=len(seeded_candidates),
-                    deep_inspection_limit=args.deep,
+                    deep_inspection_limit=deep_limit,
                     skipped_queries=len(queries),
                     stop_reason="cooldown_active",
                     failure_category="rate_limited",
@@ -306,14 +333,15 @@ def main(argv: list[str] | None = None) -> int:
                 report = pipeline.run(
                     args.requirement,
                     max_candidates=args.max_candidates,
-                    deep_limit=args.deep,
-                    include_comments=args.comments,
+                    deep_limit=deep_limit,
+                    include_comments=include_comments,
                     planned_queries=args.planned_queries,
                     seed_video_urls=seed_video_urls,
                     seed_resource_urls=seed_resource_urls,
                     bilibili_search=args.bilibili_search,
+                    discovery_mode=discovery_mode,
                     progress=(
-                        None
+                        (lambda message: print(message, file=sys.stderr, flush=True))
                         if args.summary_json
                         else lambda message: print(message, flush=True)
                     ),
@@ -324,9 +352,11 @@ def main(argv: list[str] | None = None) -> int:
             if args.summary_json:
                 print(json.dumps({
                     "run_status": report.run_status,
+                    "discovery_mode": report.discovery_mode,
                     "failure_category": report.failure_category,
                     "stop_reason": report.stop_reason,
                     "candidates_found": report.candidates_found,
+                    "deep_inspection_limit": report.deep_inspection_limit,
                     "videos_inspected": len(report.videos),
                     "resources_found": len(report.resources),
                     "candidate_urls": [item.webpage_url for item in report.candidates],
