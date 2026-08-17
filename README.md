@@ -8,7 +8,7 @@
 寻找真正有用的教程、源码、PCB、设计资料与技术路线。
 
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Version](https://img.shields.io/badge/version-1.0.2-6f42c1)](https://github.com/sunwanxu/bilibili-tech-resource-discovery/releases/tag/v1.0.2)
+[![Version](https://img.shields.io/badge/version-1.1.0-6f42c1)](https://github.com/sunwanxu/bilibili-tech-resource-discovery/releases/tag/v1.1.0)
 [![License: MIT](https://img.shields.io/badge/License-MIT-2ea44f.svg)](LICENSE)
 [![Agent Skill](https://img.shields.io/badge/Agent%20Skill-Codex%20%7C%20OpenCode-111827)](skills/bilibili-tech-resource-discovery)
 
@@ -37,6 +37,7 @@
 | 🧩 零基础学习 | “我完全不会画 PCB，想用嘉立创 EDA 画 STM32F103C8T6 最小系统板。” | 适合当前水平的视频顺序、能打开的工程、原理图/PCB/BOM 是否齐全 |
 | 🏆 搜索比赛资料 | “寻找 2026 电赛 H 题的开源资料，我想比较不同设计方案。” | 精确题目对应的视频与项目、代码/硬件/报告线索、各方案价值及缺失证据 |
 | 🎬 探索新方向 | “我想学习 AI 短剧制作，但不知道从哪里开始。” | 根据软件基础和目标生成学习路线，区分入门教程、完整案例和可复用工作流 |
+| 🧭 需求还很模糊 | “我要搭建一个云台。” | 先解释舵机、步进、无刷等路线的实际差别，让你选择或要求全部比较，再分别搜索 |
 
 你不需要先知道题目全称、仓库名称、搜索关键词或命令行参数。
 
@@ -102,7 +103,7 @@ python install.py
 安装器会保留已有的项目托管登录，使用普通 wheel 安装私有运行环境，并验证：
 
 ```text
-Runtime verified: bhka 1.0.2
+Runtime verified: bhka 1.1.0
 ```
 
 </details>
@@ -124,12 +125,17 @@ Runtime verified: bhka 1.0.2
 帮我找 ESP32-C3 MQTT 智能家居的开源实现，优先代码、PCB 和文档都比较完整的。
 ```
 
-AI 会根据问题逐步询问最重要的信息，例如：
+AI 会根据问题逐步询问最重要的信息。它不会只照着固定表格提问，而会先判断有没有一个
+足以改变整个搜索方向的“关键分叉”。例如“搭建云台”会先确认舵机、步进、无刷，或是否
+需要比较全部路线；“用无刷电机做双轴云台”已经说清路线，就不会再问一次。
+
+常见问题包括：
 
 1. 这次要学习路线、开源资料，还是两者都要？
 2. 想精选少量结果，还是大量探索灵感？
 3. 是否检查链接、文件和许可证？检查核心结果还是全部检查？
-4. 只有确实影响结果时，才继续询问基础水平、固定型号、软件版本或成果形式。
+4. 有没有会改变架构、主要元件、代码或教程路线的关键选择？
+5. 只有确实影响结果时，才继续询问基础水平、固定型号、软件版本或成果形式。
 
 如果不想继续回答，直接说 **“先搜再说”** 或 **“直接搜索”**，它会使用稳定默认值开始。
 
@@ -172,11 +178,14 @@ AI 会根据问题逐步询问最重要的信息，例如：
 
 ```mermaid
 flowchart TD
-    A["你用自然语言描述需求"] --> B["AI 只询问会影响结果的问题"]
-    B --> C{"你真正需要什么？"}
-    C -->|学习| D["寻找合适教程并规划观看顺序"]
-    C -->|资料| E["扩大候选并寻找源码与工程文件"]
-    C -->|两者| F["分别建立学习路线与资源榜单"]
+    A["你用自然语言描述需求"] --> B["AI 判断是否存在关键技术分叉"]
+    B --> C{"路线已经明确？"}
+    C -->|否| C1["解释主要路线，请你选择或全部比较"]
+    C1 --> D0{"你真正需要什么？"}
+    C -->|是| D0
+    D0 -->|学习| D["寻找合适教程并规划观看顺序"]
+    D0 -->|资料| E["扩大候选并寻找源码与工程文件"]
+    D0 -->|两者| F["分别建立学习路线与资源榜单"]
     D --> G["公开网页与 B 站候选"]
     E --> G
     F --> G

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -310,6 +311,35 @@ def test_skill_questionnaire_is_adaptive_and_user_stoppable() -> None:
     assert "four to seven" in instructions
     assert "直接搜索" in instructions
     assert "never repeat information" in instructions
+
+
+def test_skill_clarifies_high_impact_routes_before_searching() -> None:
+    skill = Path(__file__).parents[1] / "skills" / portable.SKILL_NAME
+    instructions = (skill / "SKILL.md").read_text(encoding="utf-8")
+    reference = (skill / "references" / "clarification.md").read_text(encoding="utf-8")
+
+    assert "decision-axis check" in instructions
+    assert "不确定，先比较这些路线" in instructions
+    assert "--constraint" in instructions
+    assert "dynamic slot filling" in reference
+    assert "远距离传感器" in reference
+    assert "部署本地 AI" in reference
+    assert "电源 PCB" in reference
+
+
+def test_clarification_evals_cover_ask_skip_and_comparison_across_domains() -> None:
+    project = Path(__file__).parents[1]
+    cases = json.loads(
+        (project / "evals" / "clarification_cases.json").read_text(encoding="utf-8")
+    )
+
+    assert len(cases) >= 6
+    assert {case["expected_action"] for case in cases} == {
+        "ask",
+        "search",
+        "search_comparison",
+    }
+    assert sum(case["expected_action"] == "ask" for case in cases) >= 3
 
 
 def test_portable_installer_verifies_the_exact_bundled_runtime_version(

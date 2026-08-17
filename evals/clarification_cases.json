@@ -1,0 +1,33 @@
+[
+  {
+    "request": "我要搭建云台",
+    "expected_action": "ask",
+    "decision_axis": "actuation route",
+    "must_offer_comparison": true
+  },
+  {
+    "request": "用无刷电机做双轴云台，想找控制代码和结构资料",
+    "expected_action": "search",
+    "resolved_constraint": "无刷电机双轴云台"
+  },
+  {
+    "request": "我要做一个远距离、低功耗的野外传感器，但还没定通信方案",
+    "expected_action": "ask",
+    "decision_axis": "communications route"
+  },
+  {
+    "request": "在树莓派 5 上部署本地视觉模型，必须离线运行",
+    "expected_action": "search",
+    "resolved_constraint": "树莓派 5 离线运行"
+  },
+  {
+    "request": "想画一个电源 PCB，但输入输出和功率还没定",
+    "expected_action": "ask",
+    "decision_axis": "electrical requirements before topology"
+  },
+  {
+    "request": "直接搜索各种云台实现，我就是想比较不同路线",
+    "expected_action": "search_comparison",
+    "must_offer_comparison": false
+  }
+]

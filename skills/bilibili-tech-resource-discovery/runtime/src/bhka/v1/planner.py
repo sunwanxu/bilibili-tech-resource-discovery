@@ -54,6 +54,17 @@ def _base_topic(intent: IntentProfile) -> str:
     return value or _normalized_query(intent.original_request)
 
 
+def _topic_with_constraints(intent: IntentProfile) -> str:
+    """Keep resolved user decisions in deterministic fallback queries."""
+    topic = _base_topic(intent)
+    additions: list[str] = []
+    for constraint in intent.constraints:
+        normalized = _normalized_query(constraint)
+        if normalized and normalized.casefold() not in topic.casefold():
+            additions.append(normalized)
+    return _normalized_query(" ".join([topic, *dict.fromkeys(additions)]))
+
+
 class StableQueryPlanner:
     """Small deterministic fallback; host-AI plans can replace it without changing the pipeline."""
 
@@ -78,7 +89,7 @@ class StableQueryPlanner:
         if self.explicit_queries:
             texts = list(dict.fromkeys(self.explicit_queries))[:4]
         else:
-            topic = _base_topic(intent)
+            topic = _topic_with_constraints(intent)
             texts = [topic]
             if intent.breadth != Breadth.FAST:
                 suffix = {

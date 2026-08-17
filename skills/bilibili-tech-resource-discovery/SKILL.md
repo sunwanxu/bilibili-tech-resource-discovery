@@ -58,6 +58,30 @@ than a fixed question limit: stop when another answer would not materially chang
 ranking, evidence collection, or verification. Never present a long questionnaire all at once, and
 never repeat information the user already supplied.
 
+Before asking routine volume or verification questions, run a **decision-axis check** for build,
+design, implementation, deployment, and troubleshooting requests. A decision axis is an unresolved
+choice whose answer would substantially change the architecture, main components, software stack,
+learning prerequisites, search vocabulary, or reusable artifacts. When one exists, ask the
+highest-impact axis first. Read [references/clarification.md](references/clarification.md) for the
+general procedure and examples; do not encode a fixed vocabulary for one project type.
+
+- Give two to four plausible choices in beginner-friendly language and state the practical tradeoff
+  of each in one short phrase. Include “不确定，先比较这些路线” when the user may not know.
+- Derive choices from the user's known constraints and established technical routes. For an
+  unfamiliar or fast-changing domain, use a lightweight public-web or official-document check before
+  naming the choices; do not invent a taxonomy.
+- If the user chooses one route, record it as a hard constraint, include it in precise queries, and
+  pass it with repeated `--constraint`. If the user chooses comparison, create one query per major
+  route and rank results in separate route groups.
+- Do not ask when the route is already explicit, when the alternatives would only slightly rerank the
+  same results, or when the user said to search immediately. Never silently choose the most familiar
+  route for an ambiguous build.
+
+Example: for “我要搭建云台”, first establish the result mode, then ask whether the user wants a
+servo route (simple and beginner-friendly), stepper route (precise low-speed positioning), brushless
+route (smooth motion with more control complexity), or a comparison because they are unsure. If they
+already said “用无刷电机做双轴云台”, do not ask this again.
+
 Use the problem to decide what remains worth asking:
 
 - A clear, simple request may need only one or two confirmations.
@@ -94,8 +118,9 @@ answer to `none`, `core`, or `all`. In inspiration mode, `core` checks only the 
 retains the rest as clearly unverified leads. Never silently choose `none` for a usable/open-source
 request.
 
-Ask additional questions only when the goal, level, deliverable, or fixed hardware/software constraint
-is genuinely unclear and would change the result. If the user asks to search immediately, use stable defaults: `learning` for an explicitly
+Ask additional questions only when the goal, level, deliverable, fixed hardware/software constraint,
+or high-impact decision axis is genuinely unclear and would change the result. If the user asks to
+search immediately, use stable defaults: `learning` for an explicitly
 learning-only request, otherwise `resource`; curated standard breadth, core verification, minimal
 retention, and no optional API key.
 
@@ -114,7 +139,7 @@ collect URLs. Numeric AV ids, `av...`, BV ids, and full Bilibili video URLs are 
 Run the engine with one natural-language request:
 
 ```text
-<bhka-v1> discover "<user request>" --mode <learning-resource-or-both> --breadth standard --resource-style <curated-or-inspiration> --resource-count <approximate-count> --verification core --query "<precise query>" --project-root <runtime>
+<bhka-v1> discover "<user request>" --mode <learning-resource-or-both> --breadth standard --resource-style <curated-or-inspiration> --resource-count <approximate-count> --verification core --constraint "<resolved decision or hard constraint>" --query "<precise query including that decision>" --project-root <runtime>
 ```
 
 When Bilibili search is disabled or a run-wide circuit is already open, use

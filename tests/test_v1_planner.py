@@ -35,6 +35,16 @@ def test_explicit_host_ai_queries_win_without_hidden_rewriting():
     assert plan.deep_read_target == 0
 
 
+def test_resolved_technical_route_is_kept_in_fallback_queries():
+    request = intent("我要搭建云台")
+    request.constraints = ["无刷电机方案", "双轴", "优先平滑拍摄"]
+
+    plan = StableQueryPlanner().plan(request)
+
+    assert plan.queries[0].text == "我要搭建云台 无刷电机方案 双轴 优先平滑拍摄"
+    assert "无刷电机方案" in plan.queries[1].text
+
+
 def test_fast_learning_mode_sends_one_query_and_reads_two_videos():
     plan = StableQueryPlanner().plan(
         intent("KiCad PCB 中文教程", mode=DiscoveryMode.LEARNING, breadth=Breadth.FAST)
